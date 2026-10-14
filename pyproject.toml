@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jev-inbox"
+version = "0.1.0"
+description = "Incremental, add-only Gmail job labels and a read-only application API"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "google-api-python-client>=2.180,<3",
+  "google-auth-oauthlib>=1.2,<2",
+  "google-auth-httplib2>=0.2,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.11,<1"]
+
+[project.scripts]
+jev-inbox = "jev_inbox.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

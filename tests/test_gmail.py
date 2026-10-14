@@ -1,0 +1,161 @@
+import base64
+from unittest.mock import MagicMock
+
+import httplib2
+import pytest
+from googleapiclient.errors import HttpError
+
+from jev_inbox.gmail import Gmail, StaleHistory, body_text
+
+
+def client():
+    service = MagicMock()
+    return Gmail(service), service.users.return_value
+
+
+def error(status):
+    return HttpError(httplib2.Response({"status": str(status)}), b"{}")
+
+
+def raw(labels=None):
+    return {
+        "id": "m1",
+        "threadId": "t1",
+        "internalDate": "1000",
+        "labelIds": labels if labels is not None else ["INBOX", "UNREAD", "Personal"],
+        "payload": {
+            "headers": [{"name": "Subject", "value": "Application received"}],
+            "mimeType": "text/plain",
+            "body": {"data": ""},
+        },
+    }
+
+
+def test_lists_only_inbox_and_all_pages():
+    gmail, users = client()
+    users.messages().list().execute.side_effect = [
+        {"messages": [{"id": "m1"}], "nextPageToken": "next"},
+        {"messages": [{"id": "m2"}]},
+    ]
+    assert list(gmail.inbox_ids()) == ["m1", "m2"]
+    calls = users.messages().list.call_args_list[-2:]
+    assert all(c.kwargs["labelIds"] == ["INBOX"] for c in calls)
+    assert all(c.kwargs["includeSpamTrash"] is False for c in calls)
+    assert calls[1].kwargs["pageToken"] == "next"
+
+
+@pytest.mark.parametrize("labels", [[], ["SENT"], ["INBOX", "TRASH"], ["INBOX", "SPAM"]])
+def test_non_inbox_bodies_are_never_fetched(labels):
+    gmail, users = client()
+    users.messages().get().execute.return_value = raw(labels)
+    assert gmail.inbox_message("m1") is None
+    assert users.messages().get.call_args.kwargs["format"] == "minimal"
+
+
+def test_rechecks_inbox_after_full_fetch():
+    gmail, users = client()
+    users.messages().get().execute.side_effect = [raw(), raw([])]
+    assert gmail.inbox_message("m1") is None
+
+
+def test_modify_only_adds_predefined_jev_labels():
+    gmail, users = client()
+    users.messages().get().execute.return_value = raw()
+    users.labels().list().execute.return_value = {"labels": [{"name": "JEV", "id": "J1"}]}
+    users.labels().create().execute.return_value = {"id": "J2"}
+    assert gmail.add_labels("m1", ["JEV", "JEV/Applied"])
+    assert users.messages().modify.call_args.kwargs == {
+        "userId": "me",
+        "id": "m1",
+        "body": {"addLabelIds": ["J1", "J2"]},
+    }
+    users.threads.assert_not_called()
+    for method in ("trash", "delete", "send", "batchModify"):
+        getattr(users.messages(), method).assert_not_called()
+    with pytest.raises(ValueError):
+        gmail.add_labels("m1", ["TRASH"])
+
+
+def test_archive_race_does_not_modify():
+    gmail, users = client()
+    gmail.label_ids = {"JEV": "J1"}
+    users.messages().get().execute.side_effect = [raw(), raw([])]
+    assert not gmail.add_labels("m1", ["JEV"])
+    users.messages().modify.assert_not_called()
+
+
+def test_replaying_existing_label_is_noop():
+    gmail, users = client()
+    gmail.label_ids = {"JEV": "J1"}
+    users.messages().get().execute.return_value = raw(["INBOX", "J1"])
+    assert gmail.add_labels("m1", ["JEV"])
+    users.messages().modify.assert_not_called()
+
+
+def test_history_pages_include_inbox_moves_and_deduplicate():
+    gmail, users = client()
+    users.history().list().execute.side_effect = [
+        {
+            "history": [{"messagesAdded": [{"message": {"id": "m1"}}]}],
+            "nextPageToken": "next",
+            "historyId": "19",
+        },
+        {
+            "history": [
+                {
+                    "labelsAdded": [
+                        {"message": {"id": "m1"}, "labelIds": ["INBOX"]},
+                        {"message": {"id": "m2"}, "labelIds": ["INBOX"]},
+                        {"message": {"id": "m3"}, "labelIds": ["J1"]},
+                    ]
+                }
+            ],
+            "historyId": "20",
+        },
+    ]
+    assert gmail.changes("10") == (["m1", "m2"], "20")
+    assert users.history().list.call_args.kwargs["pageToken"] == "next"
+
+
+def test_empty_history_and_expired_history_are_distinct():
+    gmail, users = client()
+    users.history().list().execute.return_value = {"historyId": "21"}
+    assert gmail.changes("20") == ([], "21")
+    users.history().list().execute.side_effect = error(404)
+    with pytest.raises(StaleHistory):
+        gmail.changes("20")
+    users.history().list().execute.side_effect = error(403)
+    with pytest.raises(HttpError):
+        gmail.changes("20")
+
+
+def test_deleted_message_is_skipped():
+    gmail, users = client()
+    users.messages().get().execute.side_effect = error(404)
+    assert gmail.inbox_message("m1") is None
+
+
+def part(mime, text, **extra):
+    return {
+        "mimeType": mime,
+        "body": {"data": base64.urlsafe_b64encode(text.encode()).decode()},
+        **extra,
+    }
+
+
+def test_mime_text_prefers_plain_and_ignores_attachments():
+    payload = {
+        "mimeType": "multipart/mixed",
+        "parts": [
+            {
+                "mimeType": "multipart/alternative",
+                "parts": [
+                    part("text/html", "<p>HTML alternative</p>"),
+                    part("text/plain", "Plain content"),
+                ],
+            },
+            part("text/plain", "Attachment content", filename="resume.txt"),
+        ],
+    }
+    assert body_text(payload).strip() == "Plain content"
+    assert body_text(part("text/html", "<style>hidden</style><p>Hello</p>")) == "\n Hello"

@@ -44,6 +44,16 @@ def test_lists_only_inbox_and_all_pages():
     assert calls[1].kwargs["pageToken"] == "next"
 
 
+def test_candidate_search_still_requires_inbox():
+    gmail, users = client()
+    users.messages().list().execute.return_value = {"messages": [{"id": "m1"}]}
+    assert list(gmail.inbox_ids(query="{job application}")) == ["m1"]
+    kwargs = users.messages().list.call_args.kwargs
+    assert kwargs["q"] == "{job application}"
+    assert kwargs["labelIds"] == ["INBOX"]
+    assert kwargs["includeSpamTrash"] is False
+
+
 @pytest.mark.parametrize("labels", [[], ["SENT"], ["INBOX", "TRASH"], ["INBOX", "SPAM"]])
 def test_non_inbox_bodies_are_never_fetched(labels):
     gmail, users = client()

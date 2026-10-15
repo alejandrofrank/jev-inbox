@@ -133,7 +133,7 @@ class Gmail:
         identity = hashlib.sha256(profile["emailAddress"].casefold().encode()).hexdigest()
         return identity, profile["historyId"]
 
-    def inbox_ids(self):
+    def inbox_ids(self, *, query=None):
         page = None
         while True:
             result = self._execute(
@@ -141,6 +141,7 @@ class Gmail:
                     userId="me",
                     labelIds=["INBOX"],
                     includeSpamTrash=False,
+                    q=query,
                     maxResults=500,
                     pageToken=page,
                 )

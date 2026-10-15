@@ -18,12 +18,23 @@ def main(argv=None):
     watch.add_argument(
         "--interval", type=int, default=300, help="Seconds between syncs (minimum 30)"
     )
+    for command in (sync, watch):
+        command.add_argument(
+            "--max-messages", type=int, help="Limit work per run; safely resume remaining messages"
+        )
+        command.add_argument(
+            "--label-only",
+            action="store_true",
+            help="Organize job mail under JEV only; do not save application summaries",
+        )
     serve = commands.add_parser("serve", help="Run the authenticated read-only API")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
     if args.command == "watch" and args.interval < 30:
         parser.error("--interval must be at least 30 seconds")
+    if getattr(args, "max_messages", None) is not None and args.max_messages < 1:
+        parser.error("--max-messages must be positive")
     settings = Settings.from_env()
     try:
         if args.command == "serve":
@@ -42,11 +53,18 @@ def main(argv=None):
             if args.command == "auth":
                 print("Gmail authorization saved locally.")
                 return 0
-            store = Store(settings.db_path)
+            db_path = settings.data_dir / "labels.sqlite3" if args.label_only else settings.db_path
+            store = Store(db_path)
             try:
                 while True:
                     try:
-                        result = synchronize(gmail, store, dry_run=getattr(args, "dry_run", False))
+                        result = synchronize(
+                            gmail,
+                            store,
+                            dry_run=getattr(args, "dry_run", False),
+                            label_only=args.label_only,
+                            max_messages=args.max_messages,
+                        )
                         print(json.dumps(result.to_dict()), flush=True)
                     except Exception as error:
                         if args.command != "watch":

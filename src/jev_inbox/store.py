@@ -60,10 +60,13 @@ class Store:
             is not None
         )
 
-    def record(self, message, decision):
+    def delete(self, key):
+        self.db.execute("DELETE FROM state WHERE key=?", (key,))
+
+    def record(self, message, decision, *, track_application=True):
         disposition = decision.status if decision else "ignored"
         self.db.execute("INSERT OR IGNORE INTO processed VALUES (?,?)", (message.id, disposition))
-        if not decision or not decision.application:
+        if not track_application or not decision or not decision.application:
             return
         self.db.execute(
             "INSERT OR IGNORE INTO events VALUES (?,?,?,?,?,?)",

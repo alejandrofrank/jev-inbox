@@ -4,6 +4,35 @@ Python MVP that labels job-related messages **currently in Gmail INBOX**, tracks
 application conversations in local SQLite, and provides an authenticated,
 read-only JSON API for Grok Bot. No AI provider or paid API key is needed.
 
+## Just organize job mail into a folder
+
+After the Gmail authorization described below, run:
+
+```sh
+jev-inbox sync --label-only --max-messages 200
+jev-inbox watch --label-only --max-messages 200 --interval 300
+```
+
+This mode adds **only the JEV label** (Gmail's folder-like organization) to
+job-related INBOX messages. Messages stay in INBOX. It needs no JEV API token,
+Grok configuration or API server. The first scan searches for likely job mail
+before classification; subsequent scans use Gmail history. A separate private
+`labels.sqlite3` file retains only processed IDs, dispositions and sync state,
+with no email text or application summaries. Existing tracking/API features
+remain optional and are not started by these commands.
+
+`--max-messages 200` bounds each run. A result with `complete: false` means more
+messages remain; the next run resumes using receipts. Partial runs keep the
+original history checkpoint until all candidates have been inspected. No new
+history is skipped when processing the initial inbox across several runs.
+
+`watch` runs while its process and computer are running. For unattended local
+operation, schedule `jev-inbox sync --label-only --max-messages 200` every five minutes under your
+own Windows account, with overlapping runs disabled. Use the virtual environment's
+`pythonw.exe -m jev_inbox sync --label-only --max-messages 200` to avoid opening a console window.
+The PC must be awake and the account signed in when using an interactive scheduled
+task. Google may require renewed consent when a test-app refresh token expires.
+
 ## Behavior
 
 - Adds only `JEV` and a predefined `JEV/*` label to individual matching messages.

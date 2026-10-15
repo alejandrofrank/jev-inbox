@@ -3,6 +3,12 @@
 import re
 from dataclasses import dataclass
 
+# Broad candidate search; every candidate still passes the conservative classifier.
+JOB_SEARCH_QUERY = (
+    "{application applying job jobs career hiring recruitment candidate position "
+    'employment candidatura puesto empleo entrevista "oportunidad laboral"}'
+)
+
 
 @dataclass(frozen=True)
 class Decision:

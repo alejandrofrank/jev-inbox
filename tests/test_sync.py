@@ -20,16 +20,18 @@ class FakeGmail:
         self.fetched = []
         self.cursor = "20"
         self.account = "synthetic-account"
+        self.baseline = "10"
         self.stale = False
         self.fail_on = None
         self.archived = set()
         self.full_scans = 0
 
     def profile(self):
-        return self.account, "10"
+        return self.account, self.baseline
 
-    def inbox_ids(self):
+    def inbox_ids(self, *, query=None):
         self.full_scans += 1
+        self.last_query = query
         return self.ids
 
     def changes(self, cursor):
@@ -145,6 +147,73 @@ def test_raw_body_is_not_persisted(store):
     item = message(body="PRIVATE_SYNTHETIC_BODY_MARKER")
     store.record(item, classify(item.subject, item.body))
     assert "PRIVATE_SYNTHETIC_BODY_MARKER" not in "\n".join(store.db.iterdump())
+
+
+def test_label_only_creates_one_folder_and_persists_no_mail_text(store):
+    gmail = FakeGmail(
+        [
+            message(subject="Application received", body="PRIVATE_BODY_MARKER"),
+            message("m2", subject="Job alert: Python developer"),
+            message("m3", subject="Dinner on Friday"),
+        ]
+    )
+    result = synchronize(gmail, store, label_only=True)
+    assert result.matched == 2
+    assert gmail.modified == [("m1", ("JEV",)), ("m2", ("JEV",))]
+    assert gmail.last_query is not None
+    assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
+    assert store.db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+    assert store.seen("m1") and store.seen("m2") and store.seen("m3")
+    assert "PRIVATE_BODY_MARKER" not in "\n".join(store.db.iterdump())
+    assert "Application received" not in "\n".join(store.db.iterdump())
+    synchronize(gmail, store, label_only=True)
+    assert len(gmail.modified) == 2
+
+
+def test_partial_initial_scan_retains_original_baseline_and_resumes(store):
+    gmail = FakeGmail([message(), message("m2", "t2"), message("m3", "t3")])
+    first = synchronize(gmail, store, label_only=True, max_messages=1)
+    assert not first.complete and store.seen("m1")
+    assert store.get("history_id") is None
+    assert store.get("backfill_history_id") == "10"
+    gmail.baseline = "50"
+    assert not synchronize(gmail, store, label_only=True, max_messages=1).complete
+    assert synchronize(gmail, store, label_only=True, max_messages=1).complete
+    assert store.get("history_id") == "10"
+    assert store.get("backfill_history_id") is None
+    assert len(gmail.modified) == 3
+
+
+def test_partial_incremental_scan_does_not_skip_unfinished_history(store):
+    gmail = FakeGmail([message()])
+    synchronize(gmail, store)
+    gmail.messages.update({"m2": message("m2", "t2"), "m3": message("m3", "t3")})
+    gmail.ids = ["m2", "m3"]
+    assert not synchronize(gmail, store, max_messages=1).complete
+    assert store.get("history_id") == "10"
+    assert synchronize(gmail, store, max_messages=1).complete
+    assert store.get("history_id") == "20"
+    assert len(gmail.modified) == 3
+
+
+def test_recovery_can_resume_in_batches(store):
+    gmail = FakeGmail([message()])
+    synchronize(gmail, store)
+    gmail.messages.update({"m2": message("m2", "t2"), "m3": message("m3", "t3")})
+    gmail.ids = ["m1", "m2", "m3"]
+    gmail.stale, gmail.baseline = True, "50"
+    assert not synchronize(gmail, store, max_messages=1).complete
+    assert store.get("history_id") == "10"
+    gmail.baseline = "60"
+    assert synchronize(gmail, store, max_messages=1).complete
+    assert store.get("history_id") == "50"
+
+
+def test_partial_dry_run_does_not_save_progress(store):
+    gmail = FakeGmail([message(), message("m2", "t2")])
+    assert not synchronize(gmail, store, dry_run=True, max_messages=1).complete
+    assert store.get("backfill_history_id") is None
+    assert not store.seen("m1")
 
 
 def test_writers_are_serialized_and_read_connection_cannot_write(tmp_path):

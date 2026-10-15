@@ -10,7 +10,24 @@ from jev_inbox.gmail import Gmail, StaleHistory, body_text
 
 def client():
     service = MagicMock()
-    return Gmail(service), service.users.return_value
+    return Gmail(service, min_interval=0), service.users.return_value
+
+
+def test_request_pacing_prevents_a_get_request_burst():
+    current_time = [100.0]
+    starts = []
+
+    def sleep(seconds):
+        current_time[0] += seconds
+
+    request = MagicMock()
+    request.execute.side_effect = lambda **kwargs: starts.append(current_time[0])
+    gmail = Gmail(MagicMock(), clock=lambda: current_time[0], sleep=sleep)
+    for _ in range(300):
+        gmail._execute(request)
+    # At most 172 requests / 3,440 get quota units can start in any 60-second window.
+    assert max(sum(start <= other < start + 60 for other in starts) for start in starts) <= 172
+    request.execute.assert_called_with(num_retries=5)
 
 
 def error(status):

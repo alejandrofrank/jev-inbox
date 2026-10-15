@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import os
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
@@ -120,13 +121,22 @@ def connect(settings, *, interactive=False):
 
 
 class Gmail:
-    def __init__(self, service):
+    def __init__(self, service, *, min_interval=0.35, clock=time.monotonic, sleep=time.sleep):
         self.users = service.users()
         self.label_ids = None
+        self._min_interval = min_interval
+        self._clock = clock
+        self._sleep = sleep
+        self._next_request = 0.0
 
-    @staticmethod
-    def _execute(request):
-        return request.execute(num_retries=3)
+    def _execute(self, request):
+        # A messages.get costs 20 quota units. Pace below 6,000 units/minute/user
+        # even if every request is a get; leave headroom for other clients/retries.
+        delay = self._next_request - self._clock()
+        if delay > 0:
+            self._sleep(delay)
+        self._next_request = self._clock() + self._min_interval
+        return request.execute(num_retries=5)
 
     def profile(self):
         profile = self._execute(self.users.getProfile(userId="me"))

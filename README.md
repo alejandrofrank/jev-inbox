@@ -25,6 +25,8 @@ remain optional and are not started by these commands.
 messages remain; the next run resumes using receipts. Partial runs keep the
 original history checkpoint until all candidates have been inspected. No new
 history is skipped when processing the initial inbox across several runs.
+Requests are paced and use bounded exponential retries to respect Gmail's
+[per-user rate limits](https://developers.google.com/workspace/gmail/api/reference/quota).
 
 `watch` runs while its process and computer are running. For unattended local
 operation, schedule `jev-inbox sync --label-only --max-messages 200` every five minutes under your

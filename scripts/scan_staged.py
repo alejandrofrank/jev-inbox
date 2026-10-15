@@ -14,7 +14,7 @@ PATTERNS = {
     "AWS access key": r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",
     "provider API key": r"\b(?:sk|xai)-[A-Za-z0-9_-]{24,}",
     "literal secret": r"""(?ix)["']?(?:api[_-]?key|client[_-]?secret|refresh[_-]?token|
-        access[_-]?token|password|jev_api_token)["']?\s*[:=]\s*["'][^"'\r\n]{12,}["']""",
+        access[_-]?token|password|jev_api_token|typesafe_api_key|jev_api_key)["']?\s*[:=]\s*["'][^"'\r\n]{12,}["']""",
     "bearer token literal": r"(?i)Bearer\s+[A-Za-z0-9_.-]{24,}",
 }
 EMAIL = re.compile(r"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")

@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS processed (
     message_id TEXT PRIMARY KEY, disposition TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS model_decisions (
+    message_id TEXT PRIMARY KEY, model TEXT NOT NULL, category TEXT NOT NULL,
+    probability REAL NOT NULL, confidence REAL NOT NULL, outcome TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS events (
     message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
     subject TEXT NOT NULL, status TEXT NOT NULL, reason TEXT NOT NULL,
@@ -62,6 +66,19 @@ class Store:
 
     def delete(self, key):
         self.db.execute("DELETE FROM state WHERE key=?", (key,))
+
+    def record_evaluation(self, message_id, evaluation):
+        self.db.execute(
+            "INSERT OR IGNORE INTO model_decisions VALUES (?,?,?,?,?,?)",
+            (
+                message_id,
+                evaluation.model,
+                evaluation.category,
+                evaluation.probability,
+                evaluation.confidence,
+                evaluation.outcome,
+            ),
+        )
 
     def record(self, message, decision, *, track_application=True):
         disposition = decision.status if decision else "ignored"

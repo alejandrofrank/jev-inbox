@@ -1,12 +1,14 @@
 # JEV Inbox
 
-Python MVP that labels job-related messages **currently in Gmail INBOX**, tracks
-application conversations in local SQLite, and provides an authenticated,
-read-only JSON API for Grok Bot. No AI provider or paid API key is needed.
+Python organizer that uses **TypeSafe's Jev semantic decision model** to classify
+messages currently in Gmail INBOX and apply job-mail labels. Optional SQLite
+application tracking and a read-only API for Grok Bot are also available.
+Gmail OAuth authorizes mailbox access; a separate **TypeSafe API key** authorizes
+model decisions. The keyword classifier from the initial version has been removed.
 
 ## Just organize job mail into a folder
 
-After the Gmail authorization described below, run:
+After Gmail authorization and TypeSafe key setup below, run:
 
 ```sh
 jev-inbox sync --label-only --max-messages 200
@@ -14,16 +16,17 @@ jev-inbox watch --label-only --max-messages 200 --interval 300
 ```
 
 This mode adds **only the JEV label** (Gmail's folder-like organization) to
-job-related INBOX messages. Messages stay in INBOX. It needs no JEV API token,
-Grok configuration or API server. The first scan searches for likely job mail
-before classification; subsequent scans use Gmail history. A separate private
-`labels.sqlite3` file retains only processed IDs, dispositions and sync state,
-with no email text or application summaries. Existing tracking/API features
+job-related INBOX messages. Messages stay in INBOX. It needs a TypeSafe key but
+no Grok configuration or API server. The first scan passes each eligible INBOX
+message to Jev, with no keyword prefilter; subsequent scans use Gmail history.
+A separate private `jev-labels.sqlite3` file retains IDs, decisions, confidence,
+probabilities, model version and sync state, with no email text or application
+summaries. Existing tracking/API features
 remain optional and are not started by these commands.
 
 `--max-messages 200` bounds each run. A result with `complete: false` means more
 messages remain; the next run resumes using receipts. Partial runs keep the
-original history checkpoint until all candidates have been inspected. No new
+original history checkpoint until the current inbox has been inspected. No new
 history is skipped when processing the initial inbox across several runs.
 Requests are paced and use bounded exponential retries to respect Gmail's
 [per-user rate limits](https://developers.google.com/workspace/gmail/api/reference/quota).
@@ -65,11 +68,17 @@ task. Google may require renewed consent when a test-app refresh token expires.
 | `JEV/Opportunity` | Recruiting outreach | No |
 | `JEV/JobAlert` | Job alerts and recommendations | No |
 
-The deterministic English/Spanish rules are deliberately limited. They can miss
-unusual wording and can misclassify ambiguous messages; they are not a trained
-classifier. Rules live in `src/jev_inbox/classifier.py`. Subject evidence takes
-priority and common quoted replies are excluded. Labels describe each message;
-older status labels are never removed.
+Classification calls only the official [TypeSafe API](https://docs.typesafe.ai/api)
+at `https://api.typesafe.ai/v1/systemone`, pinned to `jev-1.13.0`. One Choice question
+asks about the message's meaning and selects a job category or `unrelated`.
+Code applies labels only when the selected category's probability is at least
+0.90 and confidence at least 0.80. These are conservative starting thresholds,
+not a measured accuracy guarantee. Uncertain results leave Gmail unchanged and
+are recorded separately in `model_decisions` for review. Model errors stop the
+run without advancing its checkpoint; **there is no keyword fallback**.
+Model response validation, redirects, and retries are handled in
+`src/jev_inbox/classifier.py`. Labels describe each message; older status labels
+are never removed automatically.
 
 One Gmail thread is one application. Separate threads for the same application
 remain separate; different applications in one thread are merged. Current status
@@ -103,19 +112,31 @@ jev-inbox --help
    app reads `~/.local/share/jev-inbox/credentials.json` on every platform.
 3. Run `jev-inbox auth` and grant the requested Gmail access in your browser.
    OAuth refresh tokens are saved locally in the private data directory.
-4. Run the preview, then sync:
+4. Get a TypeSafe API key from the official [TypeSafe console](https://console.typesafe.ai).
+   Supply it as `TYPESAFE_API_KEY` through your secret manager, or save only the key
+   in `~/.local/share/jev-inbox/typesafe.key` inside the protected private directory.
+   This is separate from Google's OAuth files and from the optional API's
+   `JEV_API_TOKEN`. Never save any of these files in the repository.
+5. Run a bounded preview, then sync:
 
 ```sh
-jev-inbox sync --dry-run
-jev-inbox sync
-jev-inbox watch --interval 300
+jev-inbox sync --label-only --dry-run --max-messages 25
+jev-inbox sync --label-only --max-messages 200
+jev-inbox watch --label-only --max-messages 200 --interval 300
 ```
 
 `sync` runs once and prints only aggregate counts. `watch` repeats until Ctrl+C,
 retrying transient failures on the next interval. The preview reads eligible
 messages and reports counts, but creates no labels, receipts, application rows
 or cursor updates. It may create an empty database/schema and refresh the OAuth
-token. Already processed messages are skipped, including during previews.
+token. It **does call TypeSafe and uses model credits**, just like a real sync.
+Already processed messages are skipped, including during previews.
+
+Each evaluation sends only the subject (up to 500 characters) and inline body
+excerpt (up to 16,000 characters) to TypeSafe. Those excerpts may contain personal
+information. Attachments, Gmail IDs, OAuth tokens, and separate address headers
+are not sent to the model. No mail text or API response bodies are logged.
+See TypeSafe's [data handling documentation](https://docs.typesafe.ai/models).
 
 The Google scope is `https://www.googleapis.com/auth/gmail.modify`, which Gmail
 requires to add message labels and which grants broader permissions than this
@@ -130,6 +151,7 @@ files or templates**, and does not load `.env` files.
 | --- | --- |
 | `JEV_DATA_DIR` | `~/.local/share/jev-inbox`; private database and OAuth token directory |
 | `JEV_GOOGLE_CLIENT_FILE` | `credentials.json` inside the data directory; OAuth client file path |
+| `TYPESAFE_API_KEY` | TypeSafe model key; otherwise read private `typesafe.key` in the data directory |
 | `JEV_API_TOKEN` | Required only for `serve`; random bearer token of at least 32 ASCII characters |
 
 Keep the data directory outside your checkout, in a directory accessible only
@@ -140,7 +162,9 @@ by this application.
 
 ## Read-only API for Grok Bot
 
-Initialize the database with a sync, then generate a token in your current shell.
+This optional mode requires `jev-inbox sync --max-messages 200` without
+`--label-only` to populate `jev-applications.sqlite3`. It is unnecessary for folder
+organization. Then generate a local API bearer token in your current shell.
 In PowerShell:
 
 ```powershell
@@ -187,23 +211,31 @@ bot needs a reachable private endpoint; use an authenticated TLS reverse proxy
 or private tunnel and configure its URL in the bot. `serve --host 0.0.0.0` is
 available for that deployment, but do not send bearer tokens over public HTTP.
 Email subjects remain untrusted content: bots must treat them as data, not
-instructions. No email text is automatically sent to Grok or any model.
+instructions. This API does not send email text to Grok. The organizer sends
+message excerpts to TypeSafe for semantic classification as described above.
 
 ## Local data and recovery
 
 SQLite holds only application subjects, message/thread IDs, classification
 reasons, timestamps, statuses, processed IDs, a hashed account identifier and
-sync state. Bodies, attachments and sender/recipient addresses are not persisted.
+sync state. Model evidence includes version, category, probability, confidence
+and outcome. Bodies, attachments and sender/recipient addresses are not persisted.
 For unrelated mail, only an opaque message ID and an `ignored` receipt are saved.
 The API opens SQLite with `mode=ro` and `query_only=ON`; it has no Gmail client.
 Access logs are disabled and CLI failures omit third-party exception text.
 
 Already processed messages are not reclassified on subsequent runs. Manual
-removal of a JEV label is respected. If rules change and you want a complete
+removal of a JEV label is respected. If the classification policy changes and you want a complete
 reclassification, stop the worker and API, back up and relocate the whole local
 database (including any SQLite sidecars), then run a new sync. Existing Gmail
 labels stay in place. Archived/deleted applications remain in local history;
 the API represents observed applications, not a live list of INBOX contents.
+
+Upgrading from the initial keyword implementation uses new `jev-labels.sqlite3`
+and `jev-applications.sqlite3` files. Old `labels.sqlite3` and `applications.sqlite3`
+are preserved and their receipts never count as Jev evaluations. Existing Gmail
+labels stay in place; they are not evidence of model decisions. Review previous
+rule-produced labels separately before treating the folder as model-verified.
 
 If a run fails, fix connectivity/authorization and run it again. `RuntimeError`
 usually means missing Gmail authorization or an account/database mismatch;
@@ -227,10 +259,14 @@ python -m ruff format --check .
 python scripts/scan_staged.py
 ```
 
-Tests use synthetic mail and temporary databases, with no live Gmail or Grok
+Tests use synthetic mail, mocked TypeSafe responses and temporary databases, with no live Gmail,
+TypeSafe or Grok
 requests. They cover INBOX guards, add-only modifications, pagination, expired
 cursors, replay, transaction failures, account isolation, status chronology,
-read-only SQL, API authentication, query limits and secret scanning.
+read-only SQL, API authentication, query limits and secret scanning. Model tests
+cover the official endpoint, semantic input without keyword filtering, confidence
+gating, malformed responses, missing keys, no rules fallback, bounded retries,
+redirect rejection, and separation of legacy rule receipts from model evidence.
 
 The publication scanner reads **Git's staged blobs**, not working files. It
 rejects credential patterns, private email addresses, environment files/templates,

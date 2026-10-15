@@ -2,10 +2,25 @@ import sqlite3
 
 import pytest
 
-from jev_inbox.classifier import classify
+from jev_inbox.classifier import MODEL, Decision, Evaluation, JevError
 from jev_inbox.gmail import Message, StaleHistory
 from jev_inbox.store import Store, read_database
-from jev_inbox.sync import synchronize
+from jev_inbox.sync import synchronize as run_sync
+
+
+def synthetic_classifier(subject, body):
+    # Fixed test fixtures, not an alternate production classifier.
+    categories = {
+        "Application received": "applied",
+        "Job alert: Python developer": "job_alert",
+        "Update on your application": "update",
+        "Your application: interview invitation": "interview",
+    }
+    return Evaluation(MODEL, categories.get(subject, "unrelated"), 0.99, 0.98)
+
+
+def synchronize(gmail, store, **kwargs):
+    return run_sync(gmail, store, synthetic_classifier, **kwargs)
 
 
 def message(id="m1", thread="t1", subject="Application received", body="", date=1000):
@@ -145,7 +160,7 @@ def test_alerts_are_labeled_but_not_application_records(store):
 
 def test_raw_body_is_not_persisted(store):
     item = message(body="PRIVATE_SYNTHETIC_BODY_MARKER")
-    store.record(item, classify(item.subject, item.body))
+    store.record(item, Decision("applied", "synthetic"))
     assert "PRIVATE_SYNTHETIC_BODY_MARKER" not in "\n".join(store.db.iterdump())
 
 
@@ -160,7 +175,7 @@ def test_label_only_creates_one_folder_and_persists_no_mail_text(store):
     result = synchronize(gmail, store, label_only=True)
     assert result.matched == 2
     assert gmail.modified == [("m1", ("JEV",)), ("m2", ("JEV",))]
-    assert gmail.last_query is not None
+    assert gmail.last_query is None
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
     assert store.db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
     assert store.seen("m1") and store.seen("m2") and store.seen("m3")
@@ -230,3 +245,64 @@ def test_writers_are_serialized_and_read_connection_cannot_write(tmp_path):
     finally:
         first.close()
         second.close()
+
+
+def test_model_decides_without_keyword_prefilter_and_records_evidence(store):
+    gmail = FakeGmail([message(subject="Next steps", body="Meet the team Tuesday.")])
+    calls = []
+
+    def model(subject, body):
+        calls.append((subject, body))
+        return Evaluation(MODEL, "interview", 0.97, 0.96)
+
+    result = run_sync(gmail, store, model, label_only=True)
+    assert result.matched == 1 and result.model == MODEL
+    assert calls == [("Next steps", "Meet the team Tuesday.")]
+    assert gmail.last_query is None and gmail.modified == [("m1", ("JEV",))]
+    evidence = store.db.execute("SELECT * FROM model_decisions").fetchone()
+    assert evidence["model"] == MODEL and evidence["category"] == "interview"
+    assert evidence["probability"] == 0.97 and evidence["outcome"] == "matched"
+    assert "Meet the team" not in "\n".join(store.db.iterdump())
+
+
+def test_uncertain_decision_keeps_mail_untouched_and_records_uncertainty(store):
+    gmail = FakeGmail([message()])
+    result = run_sync(
+        gmail,
+        store,
+        lambda subject, body: Evaluation(MODEL, "applied", 0.6, 0.5),
+        label_only=True,
+    )
+    assert result.uncertain == 1 and result.matched == 0 and result.ignored == 0
+    assert not gmail.modified
+    assert store.db.execute("SELECT outcome FROM model_decisions").fetchone()[0] == "uncertain"
+
+
+def test_jev_error_does_not_label_using_rules_or_advance_cursor(store):
+    gmail = FakeGmail([message()])
+
+    def failing_model(subject, body):
+        raise JevError("Synthetic unavailable model")
+
+    with pytest.raises(JevError):
+        run_sync(gmail, store, failing_model, label_only=True)
+    assert not gmail.modified and not store.seen("m1")
+    assert store.get("history_id") is None and store.get("classifier_policy") is None
+    assert store.db.execute("SELECT COUNT(*) FROM model_decisions").fetchone()[0] == 0
+
+
+def test_legacy_rules_receipts_are_not_mistaken_for_model_decisions(store):
+    item = message()
+    store.record(item, Decision("applied", "legacy rules"), track_application=False)
+    gmail = FakeGmail([item])
+    with pytest.raises(RuntimeError, match="Legacy rule receipts"):
+        run_sync(gmail, store, synthetic_classifier, label_only=True)
+    assert not gmail.fetched and not gmail.modified
+
+
+def test_model_dry_run_rolls_back_decision_evidence(store):
+    gmail = FakeGmail([message()])
+    result = synchronize(gmail, store, dry_run=True, label_only=True)
+    assert result.matched == 1
+    assert store.db.execute("SELECT COUNT(*) FROM model_decisions").fetchone()[0] == 0
+    assert not gmail.modified and store.get("classifier_policy") is None

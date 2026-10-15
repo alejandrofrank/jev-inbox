@@ -36,6 +36,9 @@ def main(argv=None):
     if getattr(args, "max_messages", None) is not None and args.max_messages < 1:
         parser.error("--max-messages must be positive")
     settings = Settings.from_env()
+    from .classifier import JevClassifier, JevError
+
+    classifier = None
     try:
         if args.command == "serve":
             import uvicorn
@@ -49,11 +52,14 @@ def main(argv=None):
             from .store import Store
             from .sync import synchronize
 
+            if args.command != "auth":
+                # Fail before reading Gmail when TypeSafe access is not configured.
+                classifier = JevClassifier(settings.typesafe_key())
             gmail = connect(settings, interactive=args.command == "auth")
             if args.command == "auth":
                 print("Gmail authorization saved locally.")
                 return 0
-            db_path = settings.data_dir / "labels.sqlite3" if args.label_only else settings.db_path
+            db_path = settings.labels_db_path if args.label_only else settings.db_path
             store = Store(db_path)
             try:
                 while True:
@@ -61,6 +67,7 @@ def main(argv=None):
                         result = synchronize(
                             gmail,
                             store,
+                            classifier,
                             dry_run=getattr(args, "dry_run", False),
                             label_only=args.label_only,
                             max_messages=args.max_messages,
@@ -82,6 +89,9 @@ def main(argv=None):
                 store.close()
     except KeyboardInterrupt:
         return 0
+    except JevError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     except Exception as error:
         print(
             f"Operation failed ({type(error).__name__}). Check authorization, configuration, "
@@ -89,4 +99,7 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 1
+    finally:
+        if classifier is not None:
+            classifier.close()
     return 0

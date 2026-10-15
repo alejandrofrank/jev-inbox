@@ -14,7 +14,23 @@ class Settings:
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "applications.sqlite3"
+        return self.data_dir / "jev-applications.sqlite3"
+
+    @property
+    def labels_db_path(self) -> Path:
+        return self.data_dir / "jev-labels.sqlite3"
+
+    def typesafe_key(self):
+        from .classifier import JevError
+
+        key = os.environ.get("TYPESAFE_API_KEY", "").strip()
+        if not key:
+            path = self.data_dir / "typesafe.key"
+            if path.exists():
+                key = path.read_text(encoding="utf-8-sig").strip()
+        if not key:
+            raise JevError("TypeSafe key missing. Set TYPESAFE_API_KEY or private typesafe.key.")
+        return key
 
     @classmethod
     def from_env(cls):

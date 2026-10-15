@@ -236,7 +236,7 @@ including health and OpenAPI, requires `Authorization: Bearer <token>`.
 | --- | --- |
 | `/health` | Database availability |
 | `/v1/summary` | Total applications, counts by status, last successful sync time |
-| `/v1/applications` | Paginated summaries; `status`, `limit` (1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“100), `offset` |
+| `/v1/applications` | Paginated summaries; `status`, `limit` (1-100), `offset` |
 | `/v1/applications/{id}` | One application by opaque Gmail thread ID |
 | `/openapi.json` | API schema with bearer authentication and GET operations |
 

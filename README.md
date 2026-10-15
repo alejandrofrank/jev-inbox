@@ -1,9 +1,10 @@
 # JEV Inbox
 
 Python organizer that uses **TypeSafe's Jev semantic decision model** to classify
-messages currently in Gmail INBOX and place recruiter and application correspondence
-in the **grok** Gmail label (folder). Job alerts,
-digests and career newsletters are excluded. Optional SQLite
+messages currently in Gmail INBOX and place recruiter, application and ordinary work correspondence
+in the **grok** Gmail label (folder). Interviews, recruiter replies, application updates and conversations about
+existing jobs or freelance projects are included. Job alerts, digests and career
+newsletters are excluded. Optional SQLite
 application tracking and a read-only API for Grok Bot are also available.
 Gmail OAuth authorizes mailbox access; a separate **TypeSafe API key** authorizes
 model decisions. The keyword classifier from the initial version has been removed.
@@ -13,18 +14,18 @@ model decisions. The keyword classifier from the initial version has been remove
 After Gmail authorization and TypeSafe key setup below, run:
 
 ```sh
-jev-inbox scope --label-only --latest 100
+jev-inbox scope --label-only --latest 250
 jev-inbox sync --label-only --require-scope --max-messages 100
 jev-inbox watch --label-only --require-scope --max-messages 100 --interval 300
 ```
 
-`scope --latest 100` permanently selects the newest 100 eligible INBOX messages
+`scope --latest 250` permanently selects the newest 250 eligible INBOX messages
 by Gmail receipt time, then allows only arrivals from that starting point onward.
 Selection reads IDs and timestamps, not bodies, and saves the history checkpoint
 before enumeration. It does not call TypeSafe or change Gmail. The selected IDs
 are saved so retries cannot drift into older messages. Re-running the same scope
 command is a no-op; changing the number requires a new database and deliberate setup.
-For a deliberately authorized one-time date backfill, use a fresh v2 database:
+For a deliberately authorized one-time date backfill, use a fresh v3 database:
 
 ```sh
 jev-inbox scope --label-only --days 45
@@ -49,7 +50,7 @@ This mode adds **only the grok label** (Gmail's folder-like organization) to
 job-related INBOX messages. Messages stay in INBOX. It needs a TypeSafe key but
 no Grok configuration or API server. The first scan passes each selected INBOX
 message to Jev, with no keyword prefilter; subsequent scans use Gmail history.
-A separate private `jev-labels-v2.sqlite3` file retains IDs, decisions, confidence,
+A separate private `jev-labels-v3.sqlite3` file retains IDs, decisions, confidence,
 probabilities, model version and sync state, with no email text or application
 summaries. Existing tracking/API features
 remain optional and are not started by these commands.
@@ -106,11 +107,12 @@ task. Google may require renewed consent when a test-app refresh token expires.
 | `grok/Rejected` | Application rejection | Yes |
 | `grok/Update` | Explicit application update without a new status | Yes |
 | `grok/Opportunity` | Recruiting outreach | No |
+| `grok/Work` | Existing work, projects and client/colleague correspondence | No |
 
 Classification calls only the official [TypeSafe API](https://docs.typesafe.ai/api)
 at `https://api.typesafe.ai/v1/systemone`, pinned to `jev-1.13.0`. Two independent
 [Noul questions](https://docs.typesafe.ai/primitives/noul) ask whether the message
-is individual recruiting/application correspondence and whether it is a bulk
+is individual recruiting/application or professional work correspondence and whether it is a bulk
 job alert or digest. A separate Choice records the hiring stage. Folder membership
 requires correspondence probability >= 0.80 and alert probability <= 0.20;
 uncertainty about the exact stage cannot veto an otherwise clear match.
@@ -172,7 +174,7 @@ jev-inbox --help
 5. Run a bounded preview, then sync:
 
 ```sh
-jev-inbox scope --label-only --latest 100
+jev-inbox scope --label-only --latest 250
 jev-inbox sync --label-only --require-scope --dry-run --max-messages 25
 jev-inbox sync --label-only --require-scope --max-messages 100
 jev-inbox watch --label-only --require-scope --max-messages 100 --interval 300
@@ -216,7 +218,7 @@ by this application.
 ## Read-only API for Grok Bot
 
 This optional mode requires `jev-inbox sync --max-messages 200` without
-`--label-only` to populate `jev-applications-v2.sqlite3`. It is unnecessary for folder
+`--label-only` to populate `jev-applications-v3.sqlite3`. It is unnecessary for folder
 organization. Then generate a local API bearer token in your current shell.
 In PowerShell:
 
@@ -233,7 +235,7 @@ including health and OpenAPI, requires `Authorization: Bearer <token>`.
 | --- | --- |
 | `/health` | Database availability |
 | `/v1/summary` | Total applications, counts by status, last successful sync time |
-| `/v1/applications` | Paginated summaries; `status`, `limit` (1â€“100), `offset` |
+| `/v1/applications` | Paginated summaries; `status`, `limit` (1Ã¢â‚¬â€œ100), `offset` |
 | `/v1/applications/{id}` | One application by opaque Gmail thread ID |
 | `/openapi.json` | API schema with bearer authentication and GET operations |
 
@@ -278,10 +280,10 @@ For unrelated mail, only an opaque message ID and an `ignored` receipt are saved
 The API opens SQLite with `mode=ro` and `query_only=ON`; it has no Gmail client.
 Access logs are disabled and CLI failures omit third-party exception text.
 
-Policy v2 uses separate `jev-labels-v2.sqlite3` and `jev-applications-v2.sqlite3`
-files. Previous keyword and v1 model databases are preserved, and their decisions
+Policy v3 uses separate `jev-labels-v3.sqlite3` and `jev-applications-v3.sqlite3`
+files. Previous keyword, v1 and v2 model databases are preserved, and their decisions
 are not reused as evidence under the new policy. Configure an explicitly approved
-scope for v2 before restarting a scheduled task that requires one.
+scope for v3 before restarting a scheduled task that requires one.
 
 Already processed messages are not reclassified on subsequent runs. Manual
 removal of a grok label is respected. If the classification policy changes and you want a complete
@@ -290,8 +292,8 @@ database (including any SQLite sidecars), then run a new sync. Existing Gmail
 labels stay in place. Archived/deleted applications remain in local history;
 the API represents observed applications, not a live list of INBOX contents.
 
-Upgrading from the initial keyword implementation uses new `jev-labels-v2.sqlite3`
-and `jev-applications-v2.sqlite3` files. Old `labels.sqlite3` and `applications.sqlite3`
+Upgrading from the initial keyword implementation uses new `jev-labels-v3.sqlite3`
+and `jev-applications-v3.sqlite3` files. Old `labels.sqlite3` and `applications.sqlite3`
 are preserved and their receipts never count as Jev evaluations. Existing Gmail
 labels stay in place; they are not evidence of model decisions. Review previous
 rule-produced labels separately before treating the folder as model-verified.

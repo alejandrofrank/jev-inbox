@@ -16,6 +16,7 @@ def synthetic_classifier(subject, body, **sender):
         "Job alert: Python developer": "job_alert",
         "Update on your application": "update",
         "Your application: interview invitation": "interview",
+        "Project handoff": "work",
     }
     category = categories.get(subject, "unrelated")
     return Evaluation(
@@ -183,6 +184,13 @@ def test_alerts_are_excluded_from_folder_and_application_records(store):
     gmail = FakeGmail([message(subject="Job alert: Python developer")])
     synchronize(gmail, store)
     assert gmail.modified == []
+    assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
+
+
+def test_work_correspondence_is_labeled_without_becoming_a_job_application(store):
+    gmail = FakeGmail([message(subject="Project handoff")])
+    synchronize(gmail, store)
+    assert gmail.modified == [("m1", ("grok", "grok/Work"))]
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
 
 

@@ -65,7 +65,7 @@ def test_category_mapping_and_application_tracking(category):
         assert result.outcome == "ignored" and result.decision is None
     else:
         assert result.decision.status == category
-        assert result.decision.application == (category not in {"opportunity", "job_alert"})
+        assert result.decision.application == (category not in {"opportunity", "work"})
 
 
 @pytest.mark.parametrize("relevance,alert", [(0.6, 0.01), (0.95, 0.4), (0.5, 0.4)])

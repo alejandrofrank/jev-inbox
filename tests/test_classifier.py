@@ -7,19 +7,29 @@ import pytest
 from jev_inbox.classifier import CRITERIA, ENDPOINT, MODEL, JevClassifier, JevError, parse_response
 
 
-def response_data(category="interview", p=0.97, confidence=0.96):
+def response_data(category="interview", p=0.97, confidence=0.96, relevance=None, alert=None):
     others = [name for name in CRITERIA if name != category]
     probabilities = {name: (1 - p) / len(others) for name in others}
     probabilities[category] = p
     return {
         "model": MODEL,
         "answers": {
+            "correspondence": {
+                "type": "noul",
+                "noul": (0.01 if category in {"unrelated", "job_alert"} else 0.99)
+                if relevance is None
+                else relevance,
+            },
+            "job_alert": {
+                "type": "noul",
+                "noul": (0.99 if category == "job_alert" else 0.01) if alert is None else alert,
+            },
             "category": {
                 "type": "choice",
                 "choice": category,
                 "confidence": confidence,
                 "probabilities": probabilities,
-            }
+            },
         },
     }
 
@@ -42,7 +52,7 @@ def test_calls_official_jev_with_semantic_context_and_no_keyword_gate():
     payload = json.loads(request.content)
     assert payload["model"] == MODEL
     assert payload["state"]["subject"] == "Next steps"
-    assert set(payload["state"]) == {"subject", "body"}
+    assert set(payload["state"]) == {"subject", "body", "sender_domain", "sender_role"}
     assert payload["questions"]["category"]["type"] == "choice"
     assert result.decision.status == "interview"
     assert result.decision.labels == ("grok", "grok/Interview")
@@ -51,17 +61,22 @@ def test_calls_official_jev_with_semantic_context_and_no_keyword_gate():
 @pytest.mark.parametrize("category", list(CRITERIA))
 def test_category_mapping_and_application_tracking(category):
     result = parse_response(response_data(category))
-    if category == "unrelated":
+    if category in {"unrelated", "job_alert"}:
         assert result.outcome == "ignored" and result.decision is None
     else:
         assert result.decision.status == category
         assert result.decision.application == (category not in {"opportunity", "job_alert"})
 
 
-@pytest.mark.parametrize("p,confidence", [(0.89, 0.95), (0.96, 0.79), (0.5, 0.4)])
-def test_uncertain_model_result_cannot_label_mail(p, confidence):
-    result = parse_response(response_data(p=p, confidence=confidence))
+@pytest.mark.parametrize("relevance,alert", [(0.6, 0.01), (0.95, 0.4), (0.5, 0.4)])
+def test_uncertain_relevance_cannot_label_mail(relevance, alert):
+    result = parse_response(response_data(relevance=relevance, alert=alert))
     assert result.outcome == "uncertain" and result.decision is None
+
+
+def test_stage_ambiguity_does_not_hide_clear_recruiter_mail():
+    result = parse_response(response_data(p=0.49, confidence=0.43))
+    assert result.outcome == "matched"
 
 
 @pytest.mark.parametrize("value", [True, None, "0.99", -0.1, 1.1, float("nan"), float("inf")])
@@ -152,5 +167,47 @@ def test_payload_is_bounded():
     client = JevClassifier("synthetic", transport=httpx.MockTransport(handler))
     try:
         assert client("s" * 1000, "b" * 40000).decision is None
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("name", ["correspondence", "job_alert"])
+@pytest.mark.parametrize("value", [None, True, "0.99", -1, 2, float("nan")])
+def test_invalid_relevance_answers_fail_closed(name, value):
+    data = response_data()
+    data["answers"][name]["noul"] = value
+    with pytest.raises(JevError):
+        parse_response(data)
+
+
+def test_missing_relevance_answer_cannot_reuse_old_category_gate():
+    data = response_data()
+    del data["answers"]["correspondence"]
+    with pytest.raises(JevError):
+        parse_response(data)
+
+
+def test_digest_is_excluded_even_when_stage_is_confident():
+    assert parse_response(response_data(relevance=0.98, alert=0.95)).decision is None
+
+
+def test_sender_context_is_evidence_and_dedicated_alert_sender_is_excluded():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["state"])
+        return httpx.Response(200, json=response_data(p=0.49, confidence=0.43))
+
+    client = JevClassifier("synthetic", transport=httpx.MockTransport(handler))
+    try:
+        for role in ("job_platform", "recruiter_reply_relay", "job_alert_sender"):
+            result = client(
+                "Next steps",
+                "Synthetic hiring message.",
+                sender_domain="linkedin.com",
+                sender_role=role,
+            )
+            assert (result.outcome == "matched") == (role != "job_alert_sender")
+        assert seen[0]["sender_domain"] == "linkedin.com"
     finally:
         client.close()

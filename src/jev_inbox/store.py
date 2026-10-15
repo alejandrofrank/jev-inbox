@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS processed (
 );
 CREATE TABLE IF NOT EXISTS model_decisions (
     message_id TEXT PRIMARY KEY, model TEXT NOT NULL, category TEXT NOT NULL,
-    probability REAL NOT NULL, confidence REAL NOT NULL, outcome TEXT NOT NULL
+    probability REAL NOT NULL, confidence REAL NOT NULL, outcome TEXT NOT NULL,
+    correspondence_probability REAL, alert_probability REAL, blocked_sender INTEGER
 );
 CREATE TABLE IF NOT EXISTS events (
     message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
@@ -32,6 +33,15 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        # Keep old evidence readable; old policies still cannot be used for syncing.
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(model_decisions)")}
+        for name, kind in (
+            ("correspondence_probability", "REAL"),
+            ("alert_probability", "REAL"),
+            ("blocked_sender", "INTEGER"),
+        ):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE model_decisions ADD COLUMN {name} {kind}")
 
     def close(self):
         self.db.close()
@@ -69,7 +79,10 @@ class Store:
 
     def record_evaluation(self, message_id, evaluation):
         self.db.execute(
-            "INSERT OR IGNORE INTO model_decisions VALUES (?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO model_decisions "
+            "(message_id,model,category,probability,confidence,outcome,"
+            "correspondence_probability,alert_probability,blocked_sender) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 message_id,
                 evaluation.model,
@@ -77,6 +90,9 @@ class Store:
                 evaluation.probability,
                 evaluation.confidence,
                 evaluation.outcome,
+                evaluation.correspondence_probability,
+                evaluation.alert_probability,
+                int(evaluation.blocked_sender),
             ),
         )
 

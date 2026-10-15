@@ -15,8 +15,8 @@ def test_private_file_key_and_separate_model_databases(tmp_path, monkeypatch):
     assert settings.typesafe_key() == "synthetic"
     monkeypatch.setenv("TYPESAFE_API_KEY", "override")
     assert settings.typesafe_key() == "override"
-    assert settings.labels_db_path.name == "jev-labels.sqlite3"
-    assert settings.db_path.name == "jev-applications.sqlite3"
+    assert settings.labels_db_path.name == "jev-labels-v2.sqlite3"
+    assert settings.db_path.name == "jev-applications-v2.sqlite3"
 
 
 def test_missing_typesafe_key_stops_before_gmail_read(tmp_path, monkeypatch, capsys):

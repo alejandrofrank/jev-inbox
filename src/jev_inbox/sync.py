@@ -45,6 +45,7 @@ def synchronize(
             raise RuntimeError("Recent-mail scope is missing; run scope --latest first.")
         initial_ids = json.loads(store.get("scope_initial_ids")) if started else []
         initial_set = set(initial_ids)
+        cutoff = store.get("scope_cutoff_ms")
         pending = started and store.get("scope_pending") == "1"
 
         def recovery_ids():
@@ -89,20 +90,26 @@ def synchronize(
             if max_messages is not None and result.inspected >= max_messages:
                 result.complete = False
                 break
-            if started and message_id not in initial_set:
-                received = gmail.inbox_received_ms(message_id)
-                if received is None or received < int(started):
-                    result.skipped += 1
-                    continue
-            message = gmail.inbox_message(message_id)
+            lower_bound = 0
+            if started:
+                lower_bound = int(cutoff or 0) if message_id in initial_set else int(started)
+            message = gmail.inbox_message(message_id, minimum_received_ms=lower_bound)
             if message is None:
                 result.skipped += 1
                 continue  # A later move into INBOX must still be eligible.
             if started and message_id not in initial_set and message.received_ms < int(started):
                 result.skipped += 1
                 continue
+            if cutoff and message.received_ms < int(cutoff):
+                result.skipped += 1
+                continue
             result.inspected += 1
-            evaluation = classifier(message.subject, message.body)
+            evaluation = classifier(
+                message.subject,
+                message.body,
+                sender_domain=message.sender_domain,
+                sender_role=message.sender_role,
+            )
             decision = evaluation.decision
             if decision:
                 labels = (JOB_LABEL,) if label_only else decision.labels

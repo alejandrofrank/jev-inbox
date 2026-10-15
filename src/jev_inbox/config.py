@@ -14,11 +14,11 @@ class Settings:
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "jev-applications.sqlite3"
+        return self.data_dir / "jev-applications-v2.sqlite3"
 
     @property
     def labels_db_path(self) -> Path:
-        return self.data_dir / "jev-labels.sqlite3"
+        return self.data_dir / "jev-labels-v2.sqlite3"
 
     def typesafe_key(self):
         from .classifier import JevError

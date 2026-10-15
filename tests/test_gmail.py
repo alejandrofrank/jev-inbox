@@ -76,13 +76,20 @@ def test_non_inbox_bodies_are_never_fetched(labels):
     gmail, users = client()
     users.messages().get().execute.return_value = raw(labels)
     assert gmail.inbox_message("m1") is None
-    assert users.messages().get.call_args.kwargs["format"] == "minimal"
+    assert users.messages().get.call_args.kwargs["format"] == "metadata"
 
 
 def test_rechecks_inbox_after_full_fetch():
     gmail, users = client()
     users.messages().get().execute.side_effect = [raw(), raw([])]
     assert gmail.inbox_message("m1") is None
+
+
+def test_out_of_scope_body_is_not_fetched():
+    gmail, users = client()
+    users.messages().get().execute.return_value = raw()
+    assert gmail.inbox_message("m1", minimum_received_ms=1001) is None
+    assert users.messages().get.call_args.kwargs["format"] == "metadata"
 
 
 def test_modify_only_adds_predefined_job_labels():
@@ -232,3 +239,32 @@ def test_mime_text_prefers_plain_and_ignores_attachments():
     }
     assert body_text(payload).strip() == "Plain content"
     assert body_text(part("text/html", "<style>hidden</style><p>Hello</p>")) == "\n Hello"
+
+
+def test_personal_tab_and_no_existing_job_label_remain_eligible():
+    gmail, users = client()
+    item = raw(["INBOX", "CATEGORY_PERSONAL", "UNREAD"])
+    item["payload"]["headers"].append(
+        {"name": "From", "value": "person" + "@" + "internal.statusneo.com"}
+    )
+    users.messages().get().execute.return_value = item
+    msg = gmail.inbox_message("m1")
+    assert msg.sender_domain == "internal.statusneo.com" and msg.sender_role == "recruiter"
+
+
+def test_explicit_cleanup_removes_only_grok_and_preserves_other_labels():
+    gmail, users = client()
+    users.labels().list().execute.return_value = {"labels": [{"name": "grok", "id": "J1"}]}
+    users.messages().get().execute.return_value = raw(["INBOX", "UNREAD", "J1", "legacy"])
+    assert gmail.remove_job_label("m1")
+    assert users.messages().modify.call_args.kwargs["body"] == {"removeLabelIds": ["J1"]}
+    users.threads.assert_not_called()
+
+
+@pytest.mark.parametrize("labels", [[], ["J1"], ["INBOX", "SPAM", "J1"], ["INBOX"]])
+def test_cleanup_skips_non_inbox_or_unlabeled_messages(labels):
+    gmail, users = client()
+    users.labels().list().execute.return_value = {"labels": [{"name": "grok", "id": "J1"}]}
+    users.messages().get().execute.return_value = raw(labels)
+    assert not gmail.remove_job_label("m1")
+    users.messages().modify.assert_not_called()

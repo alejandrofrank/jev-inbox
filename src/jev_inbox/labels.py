@@ -13,7 +13,6 @@ ALLOWED_LABELS = frozenset(
                 "Offer",
                 "Rejected",
                 "Update",
-                "JobAlert",
                 "Opportunity",
             )
         ),

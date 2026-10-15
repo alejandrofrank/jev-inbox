@@ -10,10 +10,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="INBOX-only job labels and application tracking")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("auth", help="Authorize Gmail in your browser")
-    scope = commands.add_parser(
-        "scope", help="Select the latest N INBOX messages, then future mail"
-    )
-    scope.add_argument("--latest", type=int, required=True)
+    scope = commands.add_parser("scope", help="Select a bounded INBOX backfill, then future mail")
+    selection = scope.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--latest", type=int)
+    selection.add_argument("--days", type=int, help="One-time backfill of the last N days")
     scope.add_argument(
         "--label-only", action="store_true", help="Configure the folder-only database"
     )
@@ -47,8 +47,11 @@ def main(argv=None):
         parser.error("--interval must be at least 30 seconds")
     if getattr(args, "max_messages", None) is not None and args.max_messages < 1:
         parser.error("--max-messages must be positive")
-    if args.command == "scope" and args.latest < 1:
-        parser.error("--latest must be positive")
+    if args.command == "scope":
+        if args.latest is not None and args.latest < 1:
+            parser.error("--latest must be positive")
+        if args.days is not None and not 1 <= args.days <= 365:
+            parser.error("--days must be between 1 and 365")
     settings = Settings.from_env()
     from .classifier import JevClassifier, JevError
 
@@ -77,9 +80,13 @@ def main(argv=None):
             store = Store(db_path)
             try:
                 if args.command == "scope":
-                    from .scope import configure_scope
+                    from .scope import configure_days_scope, configure_scope
 
-                    selected = configure_scope(gmail, store, args.latest)
+                    selected = (
+                        configure_days_scope(gmail, store, args.days)
+                        if args.days is not None
+                        else configure_scope(gmail, store, args.latest)
+                    )
                     print(json.dumps({"initial_messages": selected, "upcoming_only": True}))
                     return 0
                 while True:

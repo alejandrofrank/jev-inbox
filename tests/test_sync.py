@@ -4,12 +4,12 @@ import pytest
 
 from jev_inbox.classifier import MODEL, Decision, Evaluation, JevError
 from jev_inbox.gmail import Message, StaleHistory
-from jev_inbox.scope import configure_scope
+from jev_inbox.scope import configure_days_scope, configure_scope
 from jev_inbox.store import Store, read_database
 from jev_inbox.sync import synchronize as run_sync
 
 
-def synthetic_classifier(subject, body):
+def synthetic_classifier(subject, body, **sender):
     # Fixed test fixtures, not an alternate production classifier.
     categories = {
         "Application received": "applied",
@@ -17,7 +17,15 @@ def synthetic_classifier(subject, body):
         "Update on your application": "update",
         "Your application: interview invitation": "interview",
     }
-    return Evaluation(MODEL, categories.get(subject, "unrelated"), 0.99, 0.98)
+    category = categories.get(subject, "unrelated")
+    return Evaluation(
+        MODEL,
+        category,
+        0.99,
+        0.98,
+        0.01 if category in {"unrelated", "job_alert"} else 0.99,
+        0.99 if category == "job_alert" else 0.01,
+    )
 
 
 def synchronize(gmail, store, **kwargs):
@@ -71,9 +79,13 @@ class FakeGmail:
             raise StaleHistory
         return self.ids, self.cursor
 
-    def inbox_message(self, id):
+    def inbox_message(self, id, *, minimum_received_ms=0):
+        self.metadata_read.append(id)
+        item = self.messages.get(id)
+        if item is None or item.received_ms < minimum_received_ms:
+            return None
         self.fetched.append(id)
-        return self.messages.get(id)
+        return item
 
     def add_labels(self, id, labels):
         if id == self.fail_on:
@@ -167,10 +179,10 @@ def test_out_of_order_updates_preserve_latest_substantive_status(store):
     assert row["first_received_ms"] == 1000 and row["last_received_ms"] == 3000
 
 
-def test_alerts_are_labeled_but_not_application_records(store):
+def test_alerts_are_excluded_from_folder_and_application_records(store):
     gmail = FakeGmail([message(subject="Job alert: Python developer")])
     synchronize(gmail, store)
-    assert gmail.modified == [("m1", ("grok", "grok/JobAlert"))]
+    assert gmail.modified == []
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
 
 
@@ -189,8 +201,8 @@ def test_label_only_creates_one_folder_and_persists_no_mail_text(store):
         ]
     )
     result = synchronize(gmail, store, label_only=True)
-    assert result.matched == 2
-    assert gmail.modified == [("m1", ("grok",)), ("m2", ("grok",))]
+    assert result.matched == 1
+    assert gmail.modified == [("m1", ("grok",))]
     assert gmail.last_query is None
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
     assert store.db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
@@ -198,7 +210,7 @@ def test_label_only_creates_one_folder_and_persists_no_mail_text(store):
     assert "PRIVATE_BODY_MARKER" not in "\n".join(store.db.iterdump())
     assert "Application received" not in "\n".join(store.db.iterdump())
     synchronize(gmail, store, label_only=True)
-    assert len(gmail.modified) == 2
+    assert len(gmail.modified) == 1
 
 
 def test_partial_initial_scan_retains_original_baseline_and_resumes(store):
@@ -267,9 +279,9 @@ def test_model_decides_without_keyword_prefilter_and_records_evidence(store):
     gmail = FakeGmail([message(subject="Next steps", body="Meet the team Tuesday.")])
     calls = []
 
-    def model(subject, body):
+    def model(subject, body, **sender):
         calls.append((subject, body))
-        return Evaluation(MODEL, "interview", 0.97, 0.96)
+        return Evaluation(MODEL, "interview", 0.97, 0.96, 0.99, 0.01)
 
     result = run_sync(gmail, store, model, label_only=True)
     assert result.matched == 1 and result.model == MODEL
@@ -286,7 +298,7 @@ def test_uncertain_decision_keeps_mail_untouched_and_records_uncertainty(store):
     result = run_sync(
         gmail,
         store,
-        lambda subject, body: Evaluation(MODEL, "applied", 0.6, 0.5),
+        lambda subject, body, **sender: Evaluation(MODEL, "applied", 0.6, 0.5, 0.6, 0.01),
         label_only=True,
     )
     assert result.uncertain == 1 and result.matched == 0 and result.ignored == 0
@@ -297,7 +309,7 @@ def test_uncertain_decision_keeps_mail_untouched_and_records_uncertainty(store):
 def test_jev_error_does_not_label_using_rules_or_advance_cursor(store):
     gmail = FakeGmail([message()])
 
-    def failing_model(subject, body):
+    def failing_model(subject, body, **sender):
         raise JevError("Synthetic unavailable model")
 
     with pytest.raises(JevError):
@@ -426,3 +438,51 @@ def test_existing_unbounded_progress_cannot_be_reinterpreted_as_a_new_scope(stor
     synchronize(gmail, store)
     with pytest.raises(RuntimeError, match="fresh model database"):
         configure_scope(gmail, store, 100)
+
+
+def test_date_backfill_rechecks_bounds_before_body_and_resumes_then_follows_history(store):
+    now = 100 * 86400000
+    cutoff = now - 45 * 86400000
+    gmail = FakeGmail(
+        [
+            message("too_old", date=cutoff - 1),
+            message("first", date=cutoff),
+            message("second", date=now - 1),
+        ]
+    )
+    configure_days_scope(gmail, store, 45, clock=lambda: now / 1000)
+    assert gmail.last_query == f"after:{cutoff // 1000 - 1} before:{now // 1000 + 1}"
+    # Frozen selection does not drift when the command is rerun later.
+    gmail.messages["new"] = message("new", date=now + 1000)
+    gmail.ids.append("new")
+    assert configure_days_scope(gmail, store, 45, clock=lambda: now / 1000 + 5000) == 3
+    assert not synchronize(gmail, store, label_only=True, max_messages=1).complete
+    assert synchronize(gmail, store, label_only=True, max_messages=1).complete
+    assert gmail.fetched == ["first", "second"]
+    assert synchronize(gmail, store, label_only=True).inspected == 1
+    assert gmail.fetched == ["first", "second", "new"]
+    gmail.stale = True
+    assert synchronize(gmail, store, label_only=True).inspected == 0
+    assert "too_old" not in gmail.fetched
+
+
+def test_date_scope_does_not_silently_replace_another_scope(store):
+    gmail = FakeGmail([message(date=900)])
+    configure_scope(gmail, store, 1, clock=lambda: 1)
+    with pytest.raises(RuntimeError, match="different recent-mail scope"):
+        configure_days_scope(gmail, store, 45)
+
+
+def test_new_policy_rejects_old_model_receipts(store):
+    store.set("classifier_policy", "typesafe-jev-job-mail-v1")
+    gmail = FakeGmail([message()])
+    with pytest.raises(RuntimeError, match="different classifier policy"):
+        synchronize(gmail, store, label_only=True)
+    assert not gmail.fetched
+
+
+def test_all_replies_in_same_thread_are_classified_independently(store):
+    gmail = FakeGmail([message("first"), message("reply"), message("personal", subject="Dinner")])
+    result = synchronize(gmail, store, label_only=True)
+    assert result.matched == 2
+    assert [mid for mid, _ in gmail.modified] == ["first", "reply"]

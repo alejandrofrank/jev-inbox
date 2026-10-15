@@ -1,4 +1,4 @@
-"""Small Gmail boundary. Its only mail mutation adds job labels to a single message."""
+"""INBOX-only label boundary; normal sync adds, explicit cleanup can remove grok."""
 
 import base64
 import hashlib
@@ -15,7 +15,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .labels import ALLOWED_LABELS
+from .labels import ALLOWED_LABELS, JOB_LABEL
+from .senders import sender_context
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -31,6 +32,8 @@ class Message:
     subject: str
     body: str
     received_ms: int
+    sender_domain: str = ""
+    sender_role: str = "unknown"
 
 
 class _Text(HTMLParser):
@@ -224,22 +227,52 @@ class Gmail:
                     ]
             window *= 2
 
-    def inbox_message(self, message_id):
+    def inbox_message(self, message_id, *, minimum_received_ms=0):
         # History may include non-INBOX IDs. Do not retrieve their bodies.
-        if not self._inbox(self._get(message_id, "minimal")):
+        metadata = self._get(message_id, "metadata", fields="id,labelIds,internalDate")
+        if not self._inbox(metadata) or int(metadata["internalDate"]) < minimum_received_ms:
             return None
         raw = self._get(message_id, "full")
-        if not self._inbox(raw):
+        if not self._inbox(raw) or int(raw["internalDate"]) < minimum_received_ms:
             return None
         payload = raw.get("payload", {})
         headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
+        domain, role = sender_context(headers.get("from", ""))
         return Message(
             raw["id"],
             raw["threadId"],
             headers.get("subject", "")[:500],
             body_text(payload),
             int(raw["internalDate"]),
+            domain,
+            role,
         )
+
+    def remove_job_label(self, message_id):
+        """Explicit cleanup only: remove grok, preserving INBOX and all other labels."""
+        result = self._execute(self.users.labels().list(userId="me"))
+        label_id = next(
+            (item["id"] for item in result.get("labels", []) if item["name"] == JOB_LABEL),
+            None,
+        )
+        if label_id is None:
+            return False
+        latest = self._get(message_id, "minimal")
+        if not self._inbox(latest) or label_id not in latest.get("labelIds", []):
+            return False
+        try:
+            self._execute(
+                self.users.messages().modify(
+                    userId="me",
+                    id=message_id,
+                    body={"removeLabelIds": [label_id]},
+                )
+            )
+        except HttpError as error:
+            if error.resp.status == 404:
+                return False
+            raise
+        return True
 
     def _label_id(self, name):
         if self.label_ids is None:

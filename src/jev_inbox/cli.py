@@ -37,7 +37,7 @@ def main(argv=None):
         command.add_argument(
             "--label-only",
             action="store_true",
-            help="Organize job mail under JEV only; do not save application summaries",
+            help="Organize job mail under grok only; do not save application summaries",
         )
     serve = commands.add_parser("serve", help="Run the authenticated read-only API")
     serve.add_argument("--host", default="127.0.0.1")

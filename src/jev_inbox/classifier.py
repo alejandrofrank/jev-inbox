@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from .labels import JOB_LABEL
+
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-1.13.0"
 POLICY = "typesafe-jev-job-mail-v1"
@@ -51,7 +53,7 @@ class Decision:
         suffix = {"job_alert": "JobAlert", "opportunity": "Opportunity"}.get(
             self.status, self.status.title()
         )
-        return ("JEV", f"JEV/{suffix}")
+        return (JOB_LABEL, f"{JOB_LABEL}/{suffix}")
 
 
 @dataclass(frozen=True)

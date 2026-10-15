@@ -95,7 +95,7 @@ def test_initial_only_changes_jobs_and_replay_is_idempotent(store):
     gmail = FakeGmail([message(), message("m2", subject="Dinner on Friday")])
     result = synchronize(gmail, store)
     assert (result.matched, result.ignored, result.mode) == (1, 1, "initial")
-    assert gmail.modified == [("m1", ("JEV", "JEV/Applied"))]
+    assert gmail.modified == [("m1", ("grok", "grok/Applied"))]
     assert store.get("history_id") == "10"
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 1
     synchronize(gmail, store)
@@ -170,7 +170,7 @@ def test_out_of_order_updates_preserve_latest_substantive_status(store):
 def test_alerts_are_labeled_but_not_application_records(store):
     gmail = FakeGmail([message(subject="Job alert: Python developer")])
     synchronize(gmail, store)
-    assert gmail.modified == [("m1", ("JEV", "JEV/JobAlert"))]
+    assert gmail.modified == [("m1", ("grok", "grok/JobAlert"))]
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
 
 
@@ -190,7 +190,7 @@ def test_label_only_creates_one_folder_and_persists_no_mail_text(store):
     )
     result = synchronize(gmail, store, label_only=True)
     assert result.matched == 2
-    assert gmail.modified == [("m1", ("JEV",)), ("m2", ("JEV",))]
+    assert gmail.modified == [("m1", ("grok",)), ("m2", ("grok",))]
     assert gmail.last_query is None
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
     assert store.db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
@@ -274,7 +274,7 @@ def test_model_decides_without_keyword_prefilter_and_records_evidence(store):
     result = run_sync(gmail, store, model, label_only=True)
     assert result.matched == 1 and result.model == MODEL
     assert calls == [("Next steps", "Meet the team Tuesday.")]
-    assert gmail.last_query is None and gmail.modified == [("m1", ("JEV",))]
+    assert gmail.last_query is None and gmail.modified == [("m1", ("grok",))]
     evidence = store.db.execute("SELECT * FROM model_decisions").fetchone()
     assert evidence["model"] == MODEL and evidence["category"] == "interview"
     assert evidence["probability"] == 0.97 and evidence["outcome"] == "matched"

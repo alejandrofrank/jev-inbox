@@ -45,7 +45,7 @@ def test_calls_official_jev_with_semantic_context_and_no_keyword_gate():
     assert set(payload["state"]) == {"subject", "body"}
     assert payload["questions"]["category"]["type"] == "choice"
     assert result.decision.status == "interview"
-    assert result.decision.labels == ("JEV", "JEV/Interview")
+    assert result.decision.labels == ("grok", "grok/Interview")
 
 
 @pytest.mark.parametrize("category", list(CRITERIA))

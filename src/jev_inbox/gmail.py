@@ -1,4 +1,4 @@
-"""Small Gmail boundary. Its only mail mutation adds JEV labels to a single message."""
+"""Small Gmail boundary. Its only mail mutation adds job labels to a single message."""
 
 import base64
 import hashlib
@@ -15,25 +15,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from .labels import ALLOWED_LABELS
+
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
-ALLOWED_LABELS = frozenset(
-    {
-        "JEV",
-        *(
-            f"JEV/{name}"
-            for name in (
-                "Applied",
-                "Assessment",
-                "Interview",
-                "Offer",
-                "Rejected",
-                "Update",
-                "JobAlert",
-                "Opportunity",
-            )
-        ),
-    }
-)
 
 
 class StaleHistory(Exception):
@@ -284,7 +268,7 @@ class Gmail:
     def add_labels(self, message_id, names):
         names = tuple(names)
         if not names or not set(names).issubset(ALLOWED_LABELS):
-            raise ValueError("Only predefined JEV labels may be added.")
+            raise ValueError("Only predefined job labels may be added.")
         if not self._inbox(self._get(message_id, "minimal")):
             return False
         desired = {self._label_id(name) for name in names}

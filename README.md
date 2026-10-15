@@ -1,12 +1,12 @@
 # JEV Inbox
 
 Python organizer that uses **TypeSafe's Jev semantic decision model** to classify
-messages currently in Gmail INBOX and apply job-mail labels. Optional SQLite
+messages currently in Gmail INBOX and place job-hunting mail in the **grok** Gmail label (folder). Optional SQLite
 application tracking and a read-only API for Grok Bot are also available.
 Gmail OAuth authorizes mailbox access; a separate **TypeSafe API key** authorizes
 model decisions. The keyword classifier from the initial version has been removed.
 
-## Just organize job mail into a folder
+## Organize job mail into grok
 
 After Gmail authorization and TypeSafe key setup below, run:
 
@@ -27,7 +27,7 @@ back into INBOX are excluded unless they were among the original selected 100.
 Expired Gmail history recovers using the same arrival boundary and selected IDs,
 never by sending the older mailbox to TypeSafe.
 
-This mode adds **only the JEV label** (Gmail's folder-like organization) to
+This mode adds **only the grok label** (Gmail's folder-like organization) to
 job-related INBOX messages. Messages stay in INBOX. It needs a TypeSafe key but
 no Grok configuration or API server. The first scan passes each selected INBOX
 message to Jev, with no keyword prefilter; subsequent scans use Gmail history.
@@ -53,7 +53,7 @@ task. Google may require renewed consent when a test-app refresh token expires.
 
 ## Behavior
 
-- Adds only `JEV` and a predefined `JEV/*` label to individual matching messages.
+- Adds only `grok` and a predefined `grok/*` label to individual matching messages.
   Never removes labels, archives, deletes, marks read, sends mail, or modifies a
   whole thread. Unrelated mail receives no Gmail mutation.
 - First run enumerates INBOX only. Later runs use Gmail history IDs and inspect
@@ -65,7 +65,7 @@ task. Google may require renewed consent when a test-app refresh token expires.
 - Rechecks INBOX membership before reading the body and immediately before
   applying labels. Gmail has no conditional check-and-modify operation: a user
   moving a message in the tiny gap between those requests can still leave it
-  with an added JEV label. This application never changes its INBOX membership.
+  with an added grok label. This application never changes its INBOX membership.
 - Commits the cursor and local changes together. A failed run keeps the previous
   checkpoint. Gmail label additions are idempotent, so replay after a crash is
   safe. An expired history ID triggers a fresh INBOX scan with deduplication.
@@ -75,14 +75,14 @@ task. Google may require renewed consent when a test-app refresh token expires.
 
 | Label | Meaning | Application record? |
 | --- | --- | --- |
-| `JEV/Applied` | Application acknowledgment | Yes |
-| `JEV/Assessment` | Technical assessment invitation | Yes |
-| `JEV/Interview` | Interview invitation or scheduling | Yes |
-| `JEV/Offer` | Employment offer | Yes |
-| `JEV/Rejected` | Application rejection | Yes |
-| `JEV/Update` | Explicit application update without a new status | Yes |
-| `JEV/Opportunity` | Recruiting outreach | No |
-| `JEV/JobAlert` | Job alerts and recommendations | No |
+| `grok/Applied` | Application acknowledgment | Yes |
+| `grok/Assessment` | Technical assessment invitation | Yes |
+| `grok/Interview` | Interview invitation or scheduling | Yes |
+| `grok/Offer` | Employment offer | Yes |
+| `grok/Rejected` | Application rejection | Yes |
+| `grok/Update` | Explicit application update without a new status | Yes |
+| `grok/Opportunity` | Recruiting outreach | No |
+| `grok/JobAlert` | Job alerts and recommendations | No |
 
 Classification calls only the official [TypeSafe API](https://docs.typesafe.ai/api)
 at `https://api.typesafe.ai/v1/systemone`, pinned to `jev-1.13.0`. One Choice question
@@ -242,7 +242,7 @@ The API opens SQLite with `mode=ro` and `query_only=ON`; it has no Gmail client.
 Access logs are disabled and CLI failures omit third-party exception text.
 
 Already processed messages are not reclassified on subsequent runs. Manual
-removal of a JEV label is respected. If the classification policy changes and you want a complete
+removal of a grok label is respected. If the classification policy changes and you want a complete
 reclassification, stop the worker and API, back up and relocate the whole local
 database (including any SQLite sidecars), then run a new sync. Existing Gmail
 labels stay in place. Archived/deleted applications remain in local history;

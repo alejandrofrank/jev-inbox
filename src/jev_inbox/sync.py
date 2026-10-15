@@ -7,6 +7,7 @@ from itertools import chain
 
 from .classifier import MODEL, POLICY
 from .gmail import StaleHistory
+from .labels import JOB_LABEL
 
 
 @dataclass
@@ -104,7 +105,7 @@ def synchronize(
             evaluation = classifier(message.subject, message.body)
             decision = evaluation.decision
             if decision:
-                labels = ("JEV",) if label_only else decision.labels
+                labels = (JOB_LABEL,) if label_only else decision.labels
                 if not dry_run and not gmail.add_labels(message.id, labels):
                     result.skipped += 1
                     continue

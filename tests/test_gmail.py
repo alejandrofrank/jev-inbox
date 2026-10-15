@@ -85,12 +85,12 @@ def test_rechecks_inbox_after_full_fetch():
     assert gmail.inbox_message("m1") is None
 
 
-def test_modify_only_adds_predefined_jev_labels():
+def test_modify_only_adds_predefined_job_labels():
     gmail, users = client()
     users.messages().get().execute.return_value = raw()
-    users.labels().list().execute.return_value = {"labels": [{"name": "JEV", "id": "J1"}]}
+    users.labels().list().execute.return_value = {"labels": [{"name": "grok", "id": "J1"}]}
     users.labels().create().execute.return_value = {"id": "J2"}
-    assert gmail.add_labels("m1", ["JEV", "JEV/Applied"])
+    assert gmail.add_labels("m1", ["grok", "grok/Applied"])
     assert users.messages().modify.call_args.kwargs == {
         "userId": "me",
         "id": "m1",
@@ -105,17 +105,17 @@ def test_modify_only_adds_predefined_jev_labels():
 
 def test_archive_race_does_not_modify():
     gmail, users = client()
-    gmail.label_ids = {"JEV": "J1"}
+    gmail.label_ids = {"grok": "J1"}
     users.messages().get().execute.side_effect = [raw(), raw([])]
-    assert not gmail.add_labels("m1", ["JEV"])
+    assert not gmail.add_labels("m1", ["grok"])
     users.messages().modify.assert_not_called()
 
 
 def test_replaying_existing_label_is_noop():
     gmail, users = client()
-    gmail.label_ids = {"JEV": "J1"}
+    gmail.label_ids = {"grok": "J1"}
     users.messages().get().execute.return_value = raw(["INBOX", "J1"])
-    assert gmail.add_labels("m1", ["JEV"])
+    assert gmail.add_labels("m1", ["grok"])
     users.messages().modify.assert_not_called()
 
 

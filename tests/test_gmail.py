@@ -162,6 +162,52 @@ def test_deleted_message_is_skipped():
     assert gmail.inbox_message("m1") is None
 
 
+def test_scope_metadata_does_not_fetch_headers_or_bodies():
+    gmail, users = client()
+    users.messages().get().execute.return_value = {
+        "id": "m1",
+        "labelIds": ["INBOX"],
+        "internalDate": "12345",
+    }
+    assert gmail.inbox_received_ms("m1") == 12345
+    kwargs = users.messages().get.call_args.kwargs
+    assert kwargs["format"] == "metadata" and kwargs["fields"] == "id,labelIds,internalDate"
+
+
+def test_latest_selection_sorts_receipt_times_not_list_order(monkeypatch):
+    gmail, _ = client()
+    queries = []
+
+    def ids(*, query):
+        queries.append(query)
+        return ["old", "future", "newest", "second"]
+
+    monkeypatch.setattr(gmail, "inbox_ids", ids)
+    dates = {"old": 1000, "newest": 9000, "second": 8000, "future": 12000}
+    monkeypatch.setattr(gmail, "inbox_received_ms", dates.get)
+    assert gmail.latest_inbox_ids(2, before_ms=10000) == ["newest", "second"]
+    assert queries == ["after:0 before:11 -in:drafts"]
+
+
+def test_latest_selection_expands_time_window_until_enough_messages(monkeypatch):
+    gmail, _ = client()
+    queries, metadata = [], []
+
+    def ids(*, query):
+        queries.append(query)
+        return ["new"] if len(queries) == 1 else ["old", "new"]
+
+    def date(mid):
+        metadata.append(mid)
+        return {"old": 4000000, "new": 8000000}[mid]
+
+    monkeypatch.setattr(gmail, "inbox_ids", ids)
+    monkeypatch.setattr(gmail, "inbox_received_ms", date)
+    assert gmail.latest_inbox_ids(2, before_ms=10000000) == ["new", "old"]
+    assert queries == ["after:6400 before:10001 -in:drafts", "after:2800 before:10001 -in:drafts"]
+    assert len(metadata) == 2
+
+
 def part(mime, text, **extra):
     return {
         "mimeType": mime,

@@ -10,6 +10,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="INBOX-only job labels and application tracking")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("auth", help="Authorize Gmail in your browser")
+    scope = commands.add_parser(
+        "scope", help="Select the latest N INBOX messages, then future mail"
+    )
+    scope.add_argument("--latest", type=int, required=True)
+    scope.add_argument(
+        "--label-only", action="store_true", help="Configure the folder-only database"
+    )
     sync = commands.add_parser("sync", help="Run an incremental INBOX sync")
     sync.add_argument(
         "--dry-run", action="store_true", help="Preview counts without labels or state"
@@ -19,6 +26,11 @@ def main(argv=None):
         "--interval", type=int, default=300, help="Seconds between syncs (minimum 30)"
     )
     for command in (sync, watch):
+        command.add_argument(
+            "--require-scope",
+            action="store_true",
+            help="Refuse to run without a saved recent-mail scope",
+        )
         command.add_argument(
             "--max-messages", type=int, help="Limit work per run; safely resume remaining messages"
         )
@@ -35,6 +47,8 @@ def main(argv=None):
         parser.error("--interval must be at least 30 seconds")
     if getattr(args, "max_messages", None) is not None and args.max_messages < 1:
         parser.error("--max-messages must be positive")
+    if args.command == "scope" and args.latest < 1:
+        parser.error("--latest must be positive")
     settings = Settings.from_env()
     from .classifier import JevClassifier, JevError
 
@@ -52,7 +66,7 @@ def main(argv=None):
             from .store import Store
             from .sync import synchronize
 
-            if args.command != "auth":
+            if args.command not in {"auth", "scope"}:
                 # Fail before reading Gmail when TypeSafe access is not configured.
                 classifier = JevClassifier(settings.typesafe_key())
             gmail = connect(settings, interactive=args.command == "auth")
@@ -62,6 +76,12 @@ def main(argv=None):
             db_path = settings.labels_db_path if args.label_only else settings.db_path
             store = Store(db_path)
             try:
+                if args.command == "scope":
+                    from .scope import configure_scope
+
+                    selected = configure_scope(gmail, store, args.latest)
+                    print(json.dumps({"initial_messages": selected, "upcoming_only": True}))
+                    return 0
                 while True:
                     try:
                         result = synchronize(
@@ -71,6 +91,7 @@ def main(argv=None):
                             dry_run=getattr(args, "dry_run", False),
                             label_only=args.label_only,
                             max_messages=args.max_messages,
+                            require_scope=args.require_scope,
                         )
                         print(json.dumps(result.to_dict()), flush=True)
                     except Exception as error:

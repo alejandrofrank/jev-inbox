@@ -190,13 +190,14 @@ class Gmail:
             if not page:
                 return sorted(ids), result["historyId"]
 
-    def _get(self, message_id, fmt):
+    def _get(self, message_id, fmt, **options):
         try:
             return self._execute(
                 self.users.messages().get(
                     userId="me",
                     id=message_id,
                     format=fmt,
+                    **options,
                 )
             )
         except HttpError as error:
@@ -208,6 +209,36 @@ class Gmail:
     def _inbox(raw):
         labels = set((raw or {}).get("labelIds", []))
         return "INBOX" in labels and not labels.intersection({"TRASH", "SPAM", "DRAFT"})
+
+    def inbox_received_ms(self, message_id):
+        # Scope checks need neither email headers nor body text.
+        raw = self._get(message_id, "metadata", fields="id,labelIds,internalDate")
+        return int(raw["internalDate"]) if self._inbox(raw) else None
+
+    def latest_inbox_ids(self, limit, before_ms):
+        """Select by Gmail receipt time, without assuming messages.list ordering."""
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        window = 3600
+        timestamps = {}
+        checked = set()
+        while True:
+            lower = max(0, before_ms // 1000 - window)
+            query = f"after:{lower} before:{before_ms // 1000 + 1} -in:drafts"
+            ids = list(self.inbox_ids(query=query))
+            if len(ids) >= limit or lower == 0:
+                for message_id in ids:
+                    if message_id in checked:
+                        continue
+                    checked.add(message_id)
+                    received = self.inbox_received_ms(message_id)
+                    if received is not None and received < before_ms:
+                        timestamps[message_id] = received
+                if len(timestamps) >= limit or lower == 0:
+                    return sorted(timestamps, key=lambda mid: (timestamps[mid], mid), reverse=True)[
+                        :limit
+                    ]
+            window *= 2
 
     def inbox_message(self, message_id):
         # History may include non-INBOX IDs. Do not retrieve their bodies.

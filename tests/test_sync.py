@@ -4,6 +4,7 @@ import pytest
 
 from jev_inbox.classifier import MODEL, Decision, Evaluation, JevError
 from jev_inbox.gmail import Message, StaleHistory
+from jev_inbox.scope import configure_scope
 from jev_inbox.store import Store, read_database
 from jev_inbox.sync import synchronize as run_sync
 
@@ -40,6 +41,21 @@ class FakeGmail:
         self.fail_on = None
         self.archived = set()
         self.full_scans = 0
+        self.metadata_read = []
+
+    def latest_inbox_ids(self, limit, before_ms):
+        return [
+            m.id
+            for m in sorted(
+                self.messages.values(), key=lambda item: (item.received_ms, item.id), reverse=True
+            )
+            if m.received_ms < before_ms
+        ][:limit]
+
+    def inbox_received_ms(self, id):
+        self.metadata_read.append(id)
+        item = self.messages.get(id)
+        return item.received_ms if item else None
 
     def profile(self):
         return self.account, self.baseline
@@ -306,3 +322,107 @@ def test_model_dry_run_rolls_back_decision_evidence(store):
     assert result.matched == 1
     assert store.db.execute("SELECT COUNT(*) FROM model_decisions").fetchone()[0] == 0
     assert not gmail.modified and store.get("classifier_policy") is None
+
+
+def test_recent_scope_processes_exact_initial_set_then_only_new_arrivals(store):
+    gmail = FakeGmail(
+        [message("old", date=100), message("recent", date=900), message("newest", date=950)]
+    )
+    assert configure_scope(gmail, store, 2, clock=lambda: 1) == 2
+    # New arrivals during initial processing are not lost.
+    gmail.messages["future"] = message("future", date=1100)
+    gmail.ids.append("future")
+    result = synchronize(gmail, store, label_only=True, require_scope=True)
+    assert result.mode == "initial_recent" and result.inspected == 2 and result.complete
+    assert gmail.fetched == ["newest", "recent"]
+    assert store.get("history_id") == "10"
+    result = synchronize(gmail, store, label_only=True, require_scope=True)
+    assert result.mode == "incremental" and result.inspected == 1
+    assert gmail.fetched == ["newest", "recent", "future"]
+    assert not store.seen("old") and gmail.full_scans == 0
+
+
+def test_recent_scope_resumes_saved_ids_without_expanding_into_old_mail(store):
+    gmail = FakeGmail(
+        [message("old", date=100), message("recent", date=900), message("newest", date=950)]
+    )
+    configure_scope(gmail, store, 2, clock=lambda: 1)
+    assert not synchronize(gmail, store, max_messages=1).complete
+    assert store.get("scope_pending") == "1"
+    assert store.get("backfill_history_id") is None
+    assert synchronize(gmail, store, max_messages=1).complete
+    assert store.get("scope_pending") == "0"
+    assert gmail.fetched == ["newest", "recent"]
+
+
+def test_initial_failure_preserves_scope_and_can_retry_without_selecting_again(store):
+    gmail = FakeGmail([message("first", date=950), message("second", date=900)])
+    configure_scope(gmail, store, 2, clock=lambda: 1)
+    gmail.fail_on = "second"
+    with pytest.raises(OSError):
+        synchronize(gmail, store)
+    assert store.get("scope_pending") == "1" and not store.seen("first")
+    gmail.messages["future"] = message("future", date=1100)
+    gmail.fail_on = None
+    assert synchronize(gmail, store).inspected == 2
+    assert not store.seen("future")
+
+
+def test_recent_scope_stale_history_recovery_stays_within_approved_boundary(store):
+    gmail = FakeGmail([message("old", date=100), message("recent", date=900)])
+    configure_scope(gmail, store, 1, clock=lambda: 1)
+    synchronize(gmail, store)
+    gmail.messages["future"] = message("future", date=1100)
+    gmail.ids.append("future")
+    gmail.stale = True
+    result = synchronize(gmail, store, require_scope=True)
+    assert result.mode == "recovery" and result.inspected == 1
+    assert gmail.last_query == "after:0"
+    assert gmail.fetched == ["recent", "future"]
+    assert "old" in gmail.metadata_read and not store.seen("old")
+
+
+def test_scoped_recovery_batches_keep_filter_and_original_checkpoint(store):
+    gmail = FakeGmail([message("recent", date=900)])
+    configure_scope(gmail, store, 1, clock=lambda: 1)
+    synchronize(gmail, store)
+    gmail.messages.update(
+        {
+            "new1": message("new1", date=1100),
+            "new2": message("new2", date=1200),
+            "old": message("old", date=100),
+        }
+    )
+    gmail.ids = ["old", "new1", "new2"]
+    gmail.stale, gmail.baseline = True, "50"
+    assert not synchronize(gmail, store, max_messages=1).complete
+    gmail.baseline = "70"
+    assert synchronize(gmail, store, max_messages=1).complete
+    assert store.get("history_id") == "50" and gmail.last_query == "after:0"
+    assert "old" not in gmail.fetched
+
+
+def test_missing_required_scope_fails_before_any_gmail_reads(store):
+    gmail = FakeGmail([message()])
+    with pytest.raises(RuntimeError, match="scope is missing"):
+        synchronize(gmail, store, require_scope=True)
+    assert gmail.full_scans == 0 and not gmail.fetched and not gmail.modified
+
+
+def test_scope_configuration_is_idempotent_and_cannot_silently_expand(store):
+    gmail = FakeGmail([message("first", date=900)])
+    configure_scope(gmail, store, 1, clock=lambda: 1)
+    gmail.messages["second"] = message("second", date=1500)
+    assert configure_scope(gmail, store, 1, clock=lambda: 2) == 1
+    assert store.get("scope_started_ms") == "1000"
+    with pytest.raises(RuntimeError, match="different recent-mail scope"):
+        configure_scope(gmail, store, 2, clock=lambda: 2)
+    synchronize(gmail, store)
+    assert gmail.fetched == ["first"]
+
+
+def test_existing_unbounded_progress_cannot_be_reinterpreted_as_a_new_scope(store):
+    gmail = FakeGmail([message()])
+    synchronize(gmail, store)
+    with pytest.raises(RuntimeError, match="fresh model database"):
+        configure_scope(gmail, store, 100)

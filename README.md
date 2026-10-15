@@ -11,20 +11,33 @@ model decisions. The keyword classifier from the initial version has been remove
 After Gmail authorization and TypeSafe key setup below, run:
 
 ```sh
-jev-inbox sync --label-only --max-messages 200
-jev-inbox watch --label-only --max-messages 200 --interval 300
+jev-inbox scope --label-only --latest 100
+jev-inbox sync --label-only --require-scope --max-messages 100
+jev-inbox watch --label-only --require-scope --max-messages 100 --interval 300
 ```
+
+`scope --latest 100` permanently selects the newest 100 eligible INBOX messages
+by Gmail receipt time, then allows only arrivals from that starting point onward.
+Selection reads IDs and timestamps, not bodies, and saves the history checkpoint
+before enumeration. It does not call TypeSafe or change Gmail. The selected IDs
+are saved so retries cannot drift into older messages. Re-running the same scope
+command is a no-op; changing the number requires a new database and deliberate setup.
+`--require-scope` stops safely if the saved scope is missing. Old messages moved
+back into INBOX are excluded unless they were among the original selected 100.
+Expired Gmail history recovers using the same arrival boundary and selected IDs,
+never by sending the older mailbox to TypeSafe.
 
 This mode adds **only the JEV label** (Gmail's folder-like organization) to
 job-related INBOX messages. Messages stay in INBOX. It needs a TypeSafe key but
-no Grok configuration or API server. The first scan passes each eligible INBOX
+no Grok configuration or API server. The first scan passes each selected INBOX
 message to Jev, with no keyword prefilter; subsequent scans use Gmail history.
 A separate private `jev-labels.sqlite3` file retains IDs, decisions, confidence,
 probabilities, model version and sync state, with no email text or application
 summaries. Existing tracking/API features
 remain optional and are not started by these commands.
 
-`--max-messages 200` bounds each run. A result with `complete: false` means more
+`--max-messages` bounds each run; it is not a limit on the total initial scope.
+A result with `complete: false` means more
 messages remain; the next run resumes using receipts. Partial runs keep the
 original history checkpoint until the current inbox has been inspected. No new
 history is skipped when processing the initial inbox across several runs.
@@ -32,9 +45,9 @@ Requests are paced and use bounded exponential retries to respect Gmail's
 [per-user rate limits](https://developers.google.com/workspace/gmail/api/reference/quota).
 
 `watch` runs while its process and computer are running. For unattended local
-operation, schedule `jev-inbox sync --label-only --max-messages 200` every five minutes under your
+operation, schedule `jev-inbox sync --label-only --require-scope --max-messages 100` every five minutes under your
 own Windows account, with overlapping runs disabled. Use the virtual environment's
-`pythonw.exe -m jev_inbox sync --label-only --max-messages 200` to avoid opening a console window.
+`pythonw.exe -m jev_inbox sync --label-only --require-scope --max-messages 100` to avoid opening a console window.
 The PC must be awake and the account signed in when using an interactive scheduled
 task. Google may require renewed consent when a test-app refresh token expires.
 
@@ -46,6 +59,9 @@ task. Google may require renewed consent when a test-app refresh token expires.
 - First run enumerates INBOX only. Later runs use Gmail history IDs and inspect
   new messages and moves into INBOX. Non-INBOX bodies and attachments are not
   retrieved. Spam, Trash and drafts are excluded even if labeled INBOX.
+- Without a configured scope and without `--require-scope`, an explicitly run
+  sync retains the original full-INBOX behavior. Use the scoped commands above
+  when only recent messages and future arrivals are authorized.
 - Rechecks INBOX membership before reading the body and immediately before
   applying labels. Gmail has no conditional check-and-modify operation: a user
   moving a message in the tiny gap between those requests can still leave it
@@ -120,9 +136,10 @@ jev-inbox --help
 5. Run a bounded preview, then sync:
 
 ```sh
-jev-inbox sync --label-only --dry-run --max-messages 25
-jev-inbox sync --label-only --max-messages 200
-jev-inbox watch --label-only --max-messages 200 --interval 300
+jev-inbox scope --label-only --latest 100
+jev-inbox sync --label-only --require-scope --dry-run --max-messages 25
+jev-inbox sync --label-only --require-scope --max-messages 100
+jev-inbox watch --label-only --require-scope --max-messages 100 --interval 300
 ```
 
 `sync` runs once and prints only aggregate counts. `watch` repeats until Ctrl+C,

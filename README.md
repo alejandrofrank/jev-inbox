@@ -110,14 +110,13 @@ task. Google may require renewed consent when a test-app refresh token expires.
 | `grok/Work` | Existing work, projects and client/colleague correspondence | No |
 
 Classification calls only the official [TypeSafe API](https://docs.typesafe.ai/api)
-at `https://api.typesafe.ai/v1/systemone`, pinned to `jev-1.13.0`. Two independent
-[Noul questions](https://docs.typesafe.ai/primitives/noul) ask whether the message
-is individual recruiting/application or professional work correspondence and whether it is a bulk
-job alert or digest. A separate Choice records the hiring stage. Folder membership
-requires correspondence probability >= 0.80 and alert probability <= 0.20;
+at `https://api.typesafe.ai/v1/systemone`, pinned to `jev-1.13.0`. Three independent
+[Noul questions](https://docs.typesafe.ai/primitives/noul) judge hiring correspondence,
+ordinary professional work, and bulk alerts/digests separately. A separate Choice records the hiring stage. Folder membership
+requires either hiring or work probability >= 0.80 and alert probability <= 0.20;
 uncertainty about the exact stage cannot veto an otherwise clear match.
-High-probability alerts (>= 0.80) and low-probability correspondence (<= 0.20)
-are ignored; the middle band remains `uncertain` without a Gmail write.
+High-probability alerts (>= 0.80) or low probabilities for both hiring and work
+(<= 0.20) are ignored; the middle band remains `uncertain` without a Gmail write.
 
 Jev receives the sender domain and a limited sender-role hint, in addition to
 subject and body. Domain matching includes actual subdomains, never lookalike
@@ -132,7 +131,9 @@ application updates and are classified by purpose instead of blanket blocking.
 These thresholds are not a measured accuracy guarantee. Model errors stop the
 run without advancing its checkpoint; **there is no keyword fallback**. Strict
 response validation, redirects and retries are handled in
-`src/jev_inbox/classifier.py`. Normal sync never removes earlier status labels.
+`src/jev_inbox/classifier.py`. Stage distributions allow bounded per-option
+rounding error and are normalized; malformed probabilities still fail closed.
+Normal sync never removes earlier status labels.
 
 One Gmail thread is one application. Separate threads for the same application
 remain separate; different applications in one thread are merged. Current status
@@ -235,7 +236,7 @@ including health and OpenAPI, requires `Authorization: Bearer <token>`.
 | --- | --- |
 | `/health` | Database availability |
 | `/v1/summary` | Total applications, counts by status, last successful sync time |
-| `/v1/applications` | Paginated summaries; `status`, `limit` (1Ã¢â‚¬â€œ100), `offset` |
+| `/v1/applications` | Paginated summaries; `status`, `limit` (1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“100), `offset` |
 | `/v1/applications/{id}` | One application by opaque Gmail thread ID |
 | `/openapi.json` | API schema with bearer authentication and GET operations |
 
@@ -274,7 +275,7 @@ message excerpts to TypeSafe for semantic classification as described above.
 SQLite holds only application subjects, message/thread IDs, classification
 reasons, timestamps, statuses, processed IDs, a hashed account identifier and
 sync state. Model evidence includes version, category, probability, confidence
-and outcome, plus correspondence/alert probabilities and the dedicated-sender
+and outcome, plus hiring/work/alert probabilities and the dedicated-sender
 exclusion flag. Bodies, attachments and sender/recipient addresses are not persisted.
 For unrelated mail, only an opaque message ID and an `ignored` receipt are saved.
 The API opens SQLite with `mode=ro` and `query_only=ON`; it has no Gmail client.

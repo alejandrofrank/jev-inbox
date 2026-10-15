@@ -14,6 +14,7 @@ def response_data(category="interview", p=0.97, confidence=0.96, relevance=None,
     return {
         "model": MODEL,
         "answers": {
+            "work": {"type": "noul", "noul": 0.99 if category == "work" else 0.01},
             "correspondence": {
                 "type": "noul",
                 "noul": (0.01 if category in {"unrelated", "job_alert"} else 0.99)
@@ -171,7 +172,7 @@ def test_payload_is_bounded():
         client.close()
 
 
-@pytest.mark.parametrize("name", ["correspondence", "job_alert"])
+@pytest.mark.parametrize("name", ["correspondence", "job_alert", "work"])
 @pytest.mark.parametrize("value", [None, True, "0.99", -1, 2, float("nan")])
 def test_invalid_relevance_answers_fail_closed(name, value):
     data = response_data()
@@ -189,6 +190,29 @@ def test_missing_relevance_answer_cannot_reuse_old_category_gate():
 
 def test_digest_is_excluded_even_when_stage_is_confident():
     assert parse_response(response_data(relevance=0.98, alert=0.95)).decision is None
+
+
+def test_work_relevance_does_not_require_a_hiring_context():
+    result = parse_response(response_data(category="work", relevance=0.01))
+    assert result.outcome == "matched" and not result.decision.application
+
+
+def test_rounded_stage_distribution_does_not_stop_relevance_classification():
+    data = response_data(p=0.96)
+    probabilities = data["answers"]["category"]["probabilities"]
+    data["answers"]["category"]["probabilities"] = {
+        k: round(v, 2) for k, v in probabilities.items()
+    }
+    result = parse_response(data)
+    assert result.outcome == "matched"
+    assert result.probability == pytest.approx(1.0)
+
+
+def test_grossly_invalid_stage_distribution_still_fails_closed():
+    data = response_data()
+    data["answers"]["category"]["probabilities"] = dict.fromkeys(CRITERIA, 0.0)
+    with pytest.raises(JevError):
+        parse_response(data)
 
 
 def test_sender_context_is_evidence_and_dedicated_alert_sender_is_excluded():

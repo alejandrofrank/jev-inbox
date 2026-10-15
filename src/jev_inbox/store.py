@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS processed (
 CREATE TABLE IF NOT EXISTS model_decisions (
     message_id TEXT PRIMARY KEY, model TEXT NOT NULL, category TEXT NOT NULL,
     probability REAL NOT NULL, confidence REAL NOT NULL, outcome TEXT NOT NULL,
-    correspondence_probability REAL, alert_probability REAL, blocked_sender INTEGER
+    correspondence_probability REAL, alert_probability REAL, blocked_sender INTEGER,
+    work_probability REAL
 );
 CREATE TABLE IF NOT EXISTS events (
     message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
@@ -39,6 +40,7 @@ class Store:
             ("correspondence_probability", "REAL"),
             ("alert_probability", "REAL"),
             ("blocked_sender", "INTEGER"),
+            ("work_probability", "REAL"),
         ):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE model_decisions ADD COLUMN {name} {kind}")
@@ -81,8 +83,8 @@ class Store:
         self.db.execute(
             "INSERT OR IGNORE INTO model_decisions "
             "(message_id,model,category,probability,confidence,outcome,"
-            "correspondence_probability,alert_probability,blocked_sender) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "correspondence_probability,alert_probability,blocked_sender,work_probability) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 message_id,
                 evaluation.model,
@@ -93,6 +95,7 @@ class Store:
                 evaluation.correspondence_probability,
                 evaluation.alert_probability,
                 int(evaluation.blocked_sender),
+                evaluation.work_probability,
             ),
         )
 

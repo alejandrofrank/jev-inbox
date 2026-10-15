@@ -62,12 +62,13 @@ history is skipped when processing the initial inbox across several runs.
 Requests are paced and use bounded exponential retries to respect Gmail's
 [per-user rate limits](https://developers.google.com/workspace/gmail/api/reference/quota).
 
-Run `sync` on demand; it exits after one pass. No recurring process is needed.
+`sync` exits after one pass and can be invoked manually or by a scheduler.
 If `complete` is false, invoke it again to continue the remaining messages.
 An authorized local bot can run the same command and read its aggregate JSON result.
 
-The existing Windows task **JEV Inbox - job folder** is configured for manual
-starts only, with no timer or sign-in triggers. On that PC, under the same account:
+The existing Windows task **JEV Inbox - job folder** runs every five minutes and
+at sign-in on the local PC. A manual start is also available on that PC under
+the same account:
 
 ```powershell
 Start-ScheduledTask -TaskName 'JEV Inbox - job folder'

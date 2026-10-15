@@ -16,7 +16,6 @@ After Gmail authorization and TypeSafe key setup below, run:
 ```sh
 jev-inbox scope --label-only --latest 250
 jev-inbox sync --label-only --require-scope --max-messages 100
-jev-inbox watch --label-only --require-scope --max-messages 100 --interval 300
 ```
 
 `scope --latest 250` permanently selects the newest 250 eligible INBOX messages
@@ -63,12 +62,25 @@ history is skipped when processing the initial inbox across several runs.
 Requests are paced and use bounded exponential retries to respect Gmail's
 [per-user rate limits](https://developers.google.com/workspace/gmail/api/reference/quota).
 
-`watch` runs while its process and computer are running. For unattended local
-operation, schedule `jev-inbox sync --label-only --require-scope --max-messages 100` every five minutes under your
-own Windows account, with overlapping runs disabled. Use the virtual environment's
-`pythonw.exe -m jev_inbox sync --label-only --require-scope --max-messages 100` to avoid opening a console window.
-The PC must be awake and the account signed in when using an interactive scheduled
-task. Google may require renewed consent when a test-app refresh token expires.
+Run `sync` on demand; it exits after one pass. No recurring process is needed.
+If `complete` is false, invoke it again to continue the remaining messages.
+An authorized local bot can run the same command and read its aggregate JSON result.
+
+The existing Windows task **JEV Inbox - job folder** is configured for manual
+starts only, with no timer or sign-in triggers. On that PC, under the same account:
+
+```powershell
+Start-ScheduledTask -TaskName 'JEV Inbox - job folder'
+```
+
+This starts one background pass of up to 100 unprocessed eligible messages and
+returns immediately. Use the CLI directly when the caller needs completion counts.
+The task reads credentials from the private local directory; no keys belong in
+the trigger command. The PC must be awake and the account signed in. No bot
+integration is installed by this command. Google may require renewed consent
+when a test-app refresh token expires.
+
+`watch` remains an optional continuous mode and runs only when explicitly started.
 
 ## Behavior
 
@@ -178,7 +190,6 @@ jev-inbox --help
 jev-inbox scope --label-only --latest 250
 jev-inbox sync --label-only --require-scope --dry-run --max-messages 25
 jev-inbox sync --label-only --require-scope --max-messages 100
-jev-inbox watch --label-only --require-scope --max-messages 100 --interval 300
 ```
 
 `sync` runs once and prints only aggregate counts. `watch` repeats until Ctrl+C,

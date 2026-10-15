@@ -66,7 +66,7 @@ Requests are paced and use bounded exponential retries to respect Gmail's
 If `complete` is false, invoke it again to continue the remaining messages.
 An authorized local bot can run the same command and read its aggregate JSON result.
 
-The existing Windows task **JEV Inbox - job folder** runs every five minutes and
+The existing Windows task **JEV Inbox - job folder** runs every 30 minutes and
 at sign-in on the local PC. A manual start is also available on that PC under
 the same account:
 

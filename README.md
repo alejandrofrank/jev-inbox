@@ -1,10 +1,12 @@
 # JEV Inbox
 
 Python organizer that uses **TypeSafe's Jev semantic decision model** to classify
-messages currently in Gmail INBOX and place recruiter, application and ordinary work correspondence
-in the **grok** Gmail label (folder). Interviews, recruiter replies, application updates and conversations about
-existing jobs or freelance projects are included. Job alerts, digests and career
-newsletters are excluded. Optional SQLite
+messages currently in Gmail INBOX and place **job-search correspondence** in the
+**grok** Gmail label (folder). Interviews, recruiter replies, application updates
+and LinkedIn personal-message notifications/reminders are included, including
+unread-message digests. Current employment, ongoing freelance/client work,
+project bot comments, product billing, accounting and taxes are excluded, as are
+job-vacancy alerts, recommended-job digests and career newsletters. Optional SQLite
 application tracking and a read-only API for Grok Bot are also available.
 Gmail OAuth authorizes mailbox access; a separate **TypeSafe API key** authorizes
 model decisions. The keyword classifier from the initial version has been removed.
@@ -24,7 +26,7 @@ Selection reads IDs and timestamps, not bodies, and saves the history checkpoint
 before enumeration. It does not call TypeSafe or change Gmail. The selected IDs
 are saved so retries cannot drift into older messages. Re-running the same scope
 command is a no-op; changing the number requires a new database and deliberate setup.
-For a deliberately authorized one-time date backfill, use a fresh v3 database:
+For a deliberately authorized one-time date backfill, use a fresh v4 database:
 
 ```sh
 jev-inbox scope --label-only --days 45
@@ -49,7 +51,7 @@ This mode adds **only the grok label** (Gmail's folder-like organization) to
 job-related INBOX messages. Messages stay in INBOX. It needs a TypeSafe key but
 no Grok configuration or API server. The first scan passes each selected INBOX
 message to Jev, with no keyword prefilter; subsequent scans use Gmail history.
-A separate private `jev-labels-v3.sqlite3` file retains IDs, decisions, confidence,
+A separate private `jev-labels-v4.sqlite3` file retains IDs, decisions, confidence,
 probabilities, model version and sync state, with no email text or application
 summaries. Existing tracking/API features
 remain optional and are not started by these commands.
@@ -119,17 +121,26 @@ when a test-app refresh token expires.
 | `grok/Offer` | Employment offer | Yes |
 | `grok/Rejected` | Application rejection | Yes |
 | `grok/Update` | Explicit application update without a new status | Yes |
-| `grok/Opportunity` | Recruiting outreach | No |
-| `grok/Work` | Existing work, projects and client/colleague correspondence | No |
+| `grok/Opportunity` | Recruiting outreach or personal-message notification | No |
 
 Classification calls only the official [TypeSafe API](https://docs.typesafe.ai/api)
-at `https://api.typesafe.ai/v1/systemone`, pinned to `jev-1.13.0`. Three independent
-[Noul questions](https://docs.typesafe.ai/primitives/noul) judge hiring correspondence,
-ordinary professional work, and bulk alerts/digests separately. A separate Choice records the hiring stage. Folder membership
-requires either hiring or work probability >= 0.80 and alert probability <= 0.20;
-uncertainty about the exact stage cannot veto an otherwise clear match.
-High-probability alerts (>= 0.80) or low probabilities for both hiring and work
-(<= 0.20) are ignored; the middle band remains `uncertain` without a Gmail write.
+at `https://api.typesafe.ai/v1/systemone`, pinned to `jev-1.13.0`. Four independent
+[Noul questions](https://docs.typesafe.ai/primitives/noul) assess hiring correspondence,
+LinkedIn personal-message notifications, existing-work/administrative mail, and
+job-vacancy alerts. A separate Choice records the hiring stage. Folder membership
+requires hiring probability >= 0.80, or message-notification probability >= 0.80
+from one of LinkedIn's two recognized notification senders. Both vacancy-alert
+and existing-work probabilities must be <= 0.20. A high exclusion score (>= 0.80)
+vetoes a match; intermediate scores remain uncertain without changing Gmail.
+Uncertainty about the exact hiring stage cannot veto otherwise clear relevance.
+
+LinkedIn personal-message reminders and unread-message summaries are included
+at the folder owner's request even when the message preview is truncated.
+Mixed notification digests qualify when they contain an explicit personal-message
+notification. Invitations, reactions and profile views alone do not qualify.
+Profile headlines in footers and other people's feed posts are not evidence of
+current work. An explicit current-work conversation remains excluded, including
+when it arrives through LinkedIn.
 
 Jev receives the sender domain and a limited sender-role hint, in addition to
 subject and body. Domain matching includes actual subdomains, never lookalike
@@ -231,7 +242,7 @@ by this application.
 ## Read-only API for Grok Bot
 
 This optional mode requires `jev-inbox sync --max-messages 200` without
-`--label-only` to populate `jev-applications-v3.sqlite3`. It is unnecessary for folder
+`--label-only` to populate `jev-applications-v4.sqlite3`. It is unnecessary for folder
 organization. Then generate a local API bearer token in your current shell.
 In PowerShell:
 
@@ -287,16 +298,22 @@ message excerpts to TypeSafe for semantic classification as described above.
 SQLite holds only application subjects, message/thread IDs, classification
 reasons, timestamps, statuses, processed IDs, a hashed account identifier and
 sync state. Model evidence includes version, category, probability, confidence
-and outcome, plus hiring/work/alert probabilities and the dedicated-sender
-exclusion flag. Bodies, attachments and sender/recipient addresses are not persisted.
+and outcome, plus hiring, personal-message, existing-work and vacancy-alert
+probabilities and sender-role flags. Bodies, attachments and sender/recipient
+addresses are not persisted.
 For unrelated mail, only an opaque message ID and an `ignored` receipt are saved.
 The API opens SQLite with `mode=ro` and `query_only=ON`; it has no Gmail client.
 Access logs are disabled and CLI failures omit third-party exception text.
 
-Policy v3 uses separate `jev-labels-v3.sqlite3` and `jev-applications-v3.sqlite3`
-files. Previous keyword, v1 and v2 model databases are preserved, and their decisions
-are not reused as evidence under the new policy. Configure an explicitly approved
-scope for v3 before restarting a scheduled task that requires one.
+Policy v4 uses separate `jev-labels-v4.sqlite3` and `jev-applications-v4.sqlite3`
+files. Previous keyword, v1, v2 and v3 databases are preserved; their decisions
+are not reused as evidence under the new policy. When upgrading a running scoped
+organizer, preserve the exact saved initial IDs and original arrival boundary.
+Capture a fresh Gmail history baseline before rescanning those IDs and later
+arrivals; retain it until the recovery scan finishes. Do not select a new latest
+250 as a substitute for the previously authorized selection. Restart the scheduled
+task only after the v4 scope is ready. Normal sync adds labels; removing old
+false positives requires a separately requested cleanup.
 
 Already processed messages are not reclassified on subsequent runs. Manual
 removal of a grok label is respected. If the classification policy changes and you want a complete
@@ -305,8 +322,8 @@ database (including any SQLite sidecars), then run a new sync. Existing Gmail
 labels stay in place. Archived/deleted applications remain in local history;
 the API represents observed applications, not a live list of INBOX contents.
 
-Upgrading from the initial keyword implementation uses new `jev-labels-v3.sqlite3`
-and `jev-applications-v3.sqlite3` files. Old `labels.sqlite3` and `applications.sqlite3`
+Upgrading from the initial keyword implementation uses new `jev-labels-v4.sqlite3`
+and `jev-applications-v4.sqlite3` files. Old `labels.sqlite3` and `applications.sqlite3`
 are preserved and their receipts never count as Jev evaluations. Existing Gmail
 labels stay in place; they are not evidence of model decisions. Review previous
 rule-produced labels separately before treating the folder as model-verified.

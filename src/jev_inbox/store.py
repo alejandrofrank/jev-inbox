@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS model_decisions (
     message_id TEXT PRIMARY KEY, model TEXT NOT NULL, category TEXT NOT NULL,
     probability REAL NOT NULL, confidence REAL NOT NULL, outcome TEXT NOT NULL,
     correspondence_probability REAL, alert_probability REAL, blocked_sender INTEGER,
-    work_probability REAL
+    work_probability REAL, non_job_probability REAL,
+    linkedin_message_probability REAL, linkedin_sender INTEGER
 );
 CREATE TABLE IF NOT EXISTS events (
     message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
@@ -41,6 +42,9 @@ class Store:
             ("alert_probability", "REAL"),
             ("blocked_sender", "INTEGER"),
             ("work_probability", "REAL"),
+            ("non_job_probability", "REAL"),
+            ("linkedin_message_probability", "REAL"),
+            ("linkedin_sender", "INTEGER"),
         ):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE model_decisions ADD COLUMN {name} {kind}")
@@ -83,8 +87,8 @@ class Store:
         self.db.execute(
             "INSERT OR IGNORE INTO model_decisions "
             "(message_id,model,category,probability,confidence,outcome,"
-            "correspondence_probability,alert_probability,blocked_sender,work_probability) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "correspondence_probability,alert_probability,blocked_sender,non_job_probability,"
+            "linkedin_message_probability,linkedin_sender) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 message_id,
                 evaluation.model,
@@ -95,7 +99,9 @@ class Store:
                 evaluation.correspondence_probability,
                 evaluation.alert_probability,
                 int(evaluation.blocked_sender),
-                evaluation.work_probability,
+                evaluation.non_job_probability,
+                evaluation.linkedin_message_probability,
+                int(evaluation.linkedin_sender),
             ),
         )
 

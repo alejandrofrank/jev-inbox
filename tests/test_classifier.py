@@ -14,7 +14,8 @@ def response_data(category="interview", p=0.97, confidence=0.96, relevance=None,
     return {
         "model": MODEL,
         "answers": {
-            "work": {"type": "noul", "noul": 0.99 if category == "work" else 0.01},
+            "non_job": {"type": "noul", "noul": 0.99 if category == "work" else 0.01},
+            "linkedin_message": {"type": "noul", "noul": 0.01},
             "correspondence": {
                 "type": "noul",
                 "noul": (0.01 if category in {"unrelated", "job_alert"} else 0.99)
@@ -62,7 +63,7 @@ def test_calls_official_jev_with_semantic_context_and_no_keyword_gate():
 @pytest.mark.parametrize("category", list(CRITERIA))
 def test_category_mapping_and_application_tracking(category):
     result = parse_response(response_data(category))
-    if category in {"unrelated", "job_alert"}:
+    if category in {"unrelated", "job_alert", "work"}:
         assert result.outcome == "ignored" and result.decision is None
     else:
         assert result.decision.status == category
@@ -172,7 +173,7 @@ def test_payload_is_bounded():
         client.close()
 
 
-@pytest.mark.parametrize("name", ["correspondence", "job_alert", "work"])
+@pytest.mark.parametrize("name", ["correspondence", "job_alert", "non_job", "linkedin_message"])
 @pytest.mark.parametrize("value", [None, True, "0.99", -1, 2, float("nan")])
 def test_invalid_relevance_answers_fail_closed(name, value):
     data = response_data()
@@ -192,9 +193,59 @@ def test_digest_is_excluded_even_when_stage_is_confident():
     assert parse_response(response_data(relevance=0.98, alert=0.95)).decision is None
 
 
-def test_work_relevance_does_not_require_a_hiring_context():
+def test_existing_work_is_excluded():
     result = parse_response(response_data(category="work", relevance=0.01))
-    assert result.outcome == "matched" and not result.decision.application
+    assert result.outcome == "ignored" and result.decision is None
+
+
+@pytest.mark.parametrize("non_job,expected", [(0.99, "ignored"), (0.5, "uncertain")])
+def test_current_work_or_billing_cannot_be_overridden_by_hiring_score(non_job, expected):
+    data = response_data()
+    data["answers"]["non_job"]["noul"] = non_job
+    assert parse_response(data).outcome == expected
+
+
+@pytest.mark.parametrize(
+    "domain,role,allowed",
+    [
+        ("linkedin.com", "linkedin_message_sender", True),
+        ("linkedin.com", "linkedin_notification_sender", True),
+        ("linkedin.com", "job_platform", False),
+        ("linkedin.com.example.test", "linkedin_message_sender", False),
+    ],
+)
+def test_message_digest_needs_both_semantic_evidence_and_sender_context(domain, role, allowed):
+    data = response_data("unrelated", relevance=0.05)
+    data["answers"]["linkedin_message"]["noul"] = 0.99
+    client = JevClassifier(
+        "synthetic", transport=httpx.MockTransport(lambda _: httpx.Response(200, json=data))
+    )
+    try:
+        result = client(
+            "You have 2 new messages",
+            "Reply to your messages.",
+            sender_domain=domain,
+            sender_role=role,
+        )
+        assert (result.outcome == "matched") == allowed
+        if allowed:
+            assert result.decision.status == "opportunity"
+            assert not result.decision.application
+    finally:
+        client.close()
+
+
+def test_linkedin_connection_invitation_does_not_qualify_as_message_digest():
+    result = parse_response(response_data("unrelated"), linkedin_sender=True)
+    assert result.outcome == "ignored"
+
+
+@pytest.mark.parametrize("veto", ["non_job", "job_alert"])
+def test_message_digest_cannot_override_known_current_work_or_vacancy_alert(veto):
+    data = response_data("unrelated")
+    data["answers"]["linkedin_message"]["noul"] = 0.99
+    data["answers"][veto]["noul"] = 0.99
+    assert parse_response(data, linkedin_sender=True).outcome == "ignored"
 
 
 def test_rounded_stage_distribution_does_not_stop_relevance_classification():

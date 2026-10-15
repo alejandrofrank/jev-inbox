@@ -26,6 +26,7 @@ def synthetic_classifier(subject, body, **sender):
         0.98,
         0.01 if category in {"unrelated", "job_alert"} else 0.99,
         0.99 if category == "job_alert" else 0.01,
+        non_job_probability=0.99 if category == "work" else 0.01,
     )
 
 
@@ -187,11 +188,40 @@ def test_alerts_are_excluded_from_folder_and_application_records(store):
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
 
 
-def test_work_correspondence_is_labeled_without_becoming_a_job_application(store):
+def test_current_work_is_not_labeled_or_tracked_as_a_job_application(store):
     gmail = FakeGmail([message(subject="Project handoff")])
     synchronize(gmail, store)
-    assert gmail.modified == [("m1", ("grok", "grok/Work"))]
+    assert gmail.modified == []
     assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
+    evidence = store.db.execute("SELECT * FROM model_decisions").fetchone()
+    assert evidence["non_job_probability"] == 0.99
+    assert evidence["outcome"] == "ignored"
+
+
+def test_linkedin_message_digest_is_labeled_without_inventing_an_application(store):
+    gmail = FakeGmail([message(subject="You have new messages")])
+    result = run_sync(
+        gmail,
+        store,
+        lambda subject, body, **sender: Evaluation(
+            MODEL,
+            "unrelated",
+            0.9,
+            0.9,
+            0.05,
+            0.01,
+            non_job_probability=0.05,
+            linkedin_message_probability=0.98,
+            linkedin_sender=True,
+        ),
+        label_only=True,
+    )
+    assert result.matched == 1
+    assert gmail.modified == [("m1", ("grok",))]
+    assert store.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
+    evidence = store.db.execute("SELECT * FROM model_decisions").fetchone()
+    assert evidence["linkedin_message_probability"] == 0.98
+    assert evidence["linkedin_sender"] == 1
 
 
 def test_raw_body_is_not_persisted(store):

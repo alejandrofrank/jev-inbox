@@ -30,6 +30,10 @@ def sender_context(header):
             return domain, "job_alert_sender"
         if local == "hit-reply":
             return domain, "recruiter_reply_relay"
+        if local == "messages-noreply":
+            return domain, "linkedin_message_sender"
+        if local == "notifications-noreply":
+            return domain, "linkedin_notification_sender"
     if any(domain == root or domain.endswith("." + root) for root in RECRUITERS):
         return domain, "recruiter"
     if any(domain == root or domain.endswith("." + root) for root in PLATFORMS):
